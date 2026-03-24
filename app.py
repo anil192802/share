@@ -119,6 +119,39 @@ with st.sidebar:
     political_bonus = st.slider("Political Scenario ", min_value=-2, max_value=2, value=0, step=1)
     news_bonus = st.slider("Symbol News", min_value=-2, max_value=2, value=0, step=1)
 
+    if st.session_state.get("is_admin", False):
+        st.divider()
+        st.header("⚙️ Admin Management")
+        with st.expander("👤 User List"):
+            user_records = list_users()
+            if user_records:
+                user_list_display = [{"Username": u[0], "Role": "Admin" if u[1] else "User"} for u in user_records]
+                st.table(pd.DataFrame(user_list_display))
+
+        with st.expander("➕ Create New User"):
+            with st.form("sidebar_create_user", clear_on_submit=True):
+                un = st.text_input("Username")
+                pw = st.text_input("Password", type="password")
+                if st.form_submit_button("Create User"):
+                    if un and pw:
+                        success, msg = create_user(un, pw)
+                        if success: st.success(msg)
+                        else: st.error(msg)
+                    else: st.error("Required fields missing")
+
+        with st.expander("🗑️ Delete User"):
+            delete_candidates = [u[0] for u in user_records if u[0] != st.session_state.username]
+            if delete_candidates:
+                user_to_del = st.selectbox("Select User", delete_candidates)
+                if st.button("Delete Permanently"):
+                    success, msg = delete_user(user_to_del)
+                    if success: 
+                        st.success(msg)
+                        st.rerun()
+                    else: st.error(msg)
+            else:
+                st.info("No other users to delete")
+
     refresh = st.button("Refresh data")
 
 if "cache_key" not in st.session_state:
@@ -514,8 +547,6 @@ tabs_names = [
     "📉 Sell Tomorrow",
     "🏗️ Sector Wise",
 ]
-if st.session_state.get("is_admin", False):
-    tabs_names.append("⚙️ Admin")
 
 # Set the active tab in st.tabs using session_state (programmatic switch logic)
 tabs = st.tabs(tabs_names)
@@ -1123,38 +1154,6 @@ with tabs[6]:
             hide_index=True,
         )
 
-# Tab Admin
-if st.session_state.get("is_admin", False):
-    with tabs[7]:
-        st.header("User Management Panel")
-    st.info("As an administrator, you can manage user accounts and their portfolios.")
-
-    with st.expander("➕ Create New User"):
-        with st.form("create_user_form", clear_on_submit=True):
-            un = st.text_input("Username")
-            pw = st.text_input("Password", type="password")
-            if st.form_submit_button("Create User"):
-                if un and pw:
-                    success, msg = create_user(un, pw)
-                    if success: st.success(msg)
-                    else: st.error(msg)
-                else: st.error("Please provide both username and password")
-
-    st.subheader("System Users")
-    user_records = list_users()
-    if user_records:
-        user_list_display = [{"Username": u[0], "Role": "Admin" if u[1] else "User"} for u in user_records]
-        st.table(pd.DataFrame(user_list_display))
-
-        with st.expander("🗑️ Delete User"):
-            delete_candidates = [u[0] for u in user_records if u[0] != st.session_state.username]
-            if delete_candidates:
-                target_u = st.selectbox("Select User to Delete", delete_candidates)
-                if st.checkbox(f"Confirm deletion of {target_u}"):
-                    if st.button("Delete Permanently"):
-                        ok_del, msg_del = delete_user(target_u)
-                        if ok_del:
-                            st.success(msg_del)
-                            st.rerun()
-                        else: st.error(msg_del)
-            else: st.info("No other users available to delete.")
+# Final Footer
+st.divider()
+st.caption(f"Logged in as {st.session_state.username} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
