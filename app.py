@@ -23,6 +23,10 @@ from nepal_stock_app.technical import (
     evaluate_combined_recommendation,
     evaluate_technical_signal,
 )
+from nepal_stock_app.database import init_db, add_trade, remove_trade, get_portfolio
+
+# Initialize database
+init_db()
 
 st.set_page_config(page_title="NEPSE Technical Analyzer", layout="wide")
 
@@ -34,8 +38,9 @@ if not st.session_state.logged_in:
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
-        if username == "admin" and password == "admin":
+        if username == "anil" and password == "anil":
             st.session_state.logged_in = True
+            st.session_state.username = username
             st.rerun()
         else:
             st.error("Invalid username or password")
@@ -49,14 +54,18 @@ with st.sidebar:
     st.header("User")
     if st.button("Logout"):
         st.session_state.logged_in = False
+        st.session_state.target_tab = None
         st.rerun()
 
     st.header("Market Screener")
     signal_filter = st.selectbox("Intraday Signal", ["ALL", "BUY", "SELL", "HOLD"], index=0)
     top_n = st.slider("Top rows", min_value=10, max_value=300, value=80, step=10)
 
+    def on_symbol_change():
+        st.session_state.target_tab = "Symbol Technical Analysis"
+
     st.header("Symbol Technical")
-    symbol_input = st.text_input("Symbol", value="NABIL")
+    symbol_input = st.text_input("Symbol", value="NABIL", on_change=on_symbol_change)
     lookback_days = st.slider("Lookback days", min_value=20, max_value=120, value=45, step=5)
     all_symbols_lookback_days = st.slider(
         "All symbols lookback (faster)",
@@ -78,8 +87,8 @@ with st.sidebar:
     risk_percent = st.slider("Risk per trade (%)", min_value=0.5, max_value=5.0, value=1.0, step=0.5)
 
     st.header("Context Bonus")
-    political_bonus = st.slider("Political scenario bonus", min_value=-2, max_value=2, value=0, step=1)
-    news_bonus = st.slider("Symbol news bonus", min_value=-2, max_value=2, value=0, step=1)
+    political_bonus = st.slider("Political Scenario ", min_value=-2, max_value=2, value=0, step=1)
+    news_bonus = st.slider("Symbol News", min_value=-2, max_value=2, value=0, step=1)
 
     refresh = st.button("Refresh data")
 
@@ -88,6 +97,7 @@ if "cache_key" not in st.session_state:
 
 if refresh:
     st.session_state.cache_key = datetime.now().isoformat()
+    st.rerun()
 
 
 @st.cache_data(ttl=300)
@@ -453,24 +463,114 @@ except Exception as exc:
     st.error(f"Could not fetch market data: {exc}")
     st.stop()
 
-all_symbols_master_df = build_fallback_all_symbols_from_market(market_df)
-all_symbols_master_df = enrich_all_symbols_with_market_fallback(all_symbols_master_df, market_df)
-all_symbols_error = None
+# Load all symbols data synchronously (no background loading)
+with st.spinner("Loading comprehensive technicals for all symbols... this may take a moment."):
+    try:
+        raw_all_symbols_df = get_all_symbols_technical(st.session_state.cache_key, all_symbols_lookback_days)
+        all_symbols_master_df = enrich_all_symbols_with_market_fallback(raw_all_symbols_df, market_df)
+        all_symbols_error = None
+    except Exception as e:
+        all_symbols_error = str(e)
+        all_symbols_master_df = build_fallback_all_symbols_from_market(market_df)
+
+if "target_tab" not in st.session_state:
+    st.session_state.target_tab = "My Portfolio"
 
 analyzed_df = market_df.copy()
 if signal_filter != "ALL":
     analyzed_df = analyzed_df[analyzed_df["signal"] == signal_filter]
 
-tab_market, tab_symbol, tab_all, tab_buy_tomorrow, tab_sell_tomorrow, tab_buy_sector = st.tabs(
-    [
-        "Market Signals",
-        "Symbol Technical Analysis",
-        "Daily All Symbols",
-        "What to Buy Tomorrow",
-        "What to Sell Tomorrow",
-        "Buy Sector Wise",
-    ]
+tabs_names = [
+    "My Portfolio",
+    "Market Signals",
+    "Symbol Technical Analysis",
+    "All Symbols Technical Analysis",
+    "What to Buy Tomorrow",
+    "What to Sell Tomorrow",
+    "Buy Sector Wise",
+]
+
+# We use standard tabs
+tab_portfolio, tab_market, tab_symbol, tab_all, tab_buy_tomorrow, tab_sell_tomorrow, tab_buy_sector = st.tabs(
+    tabs_names
 )
+
+if st.session_state.target_tab == "Symbol Technical Analysis":
+    st.info("💡 You entered a symbol! Please click the **'Symbol Technical Analysis'** tab above to view the analysis.", icon="ℹ️")
+    # Reset target so message goes away
+    st.session_state.target_tab = "My Portfolio"
+
+with tab_portfolio:
+    st.header("My Portfolio Tracker")
+    st.caption("Track your actual holdings and see live P&L and technical signals.")
+    
+    with st.expander("Add New Trade"):
+        with st.form("trade_form", clear_on_submit=True):
+            col1, col2, col3 = st.columns(3)
+            pf_sym = col1.text_input("Symbol", "NICA").strip()
+            pf_price = col2.number_input("Buy Price (NPR)", min_value=1.0, value=350.0, step=10.0)
+            pf_qty = col3.number_input("Quantity", min_value=1, value=10, step=10)
+            submitted = st.form_submit_button("Add Trade")
+            if submitted:
+                add_trade("admin", pf_sym, pf_price, pf_qty)
+                st.success(f"Added {pf_qty} shares of {pf_sym} at {pf_price}")
+                st.rerun()
+                
+    portfolio_df = get_portfolio("admin")
+    if portfolio_df.empty:
+        st.info("Your portfolio is empty. Add a trade to start tracking.")
+    else:
+        # Merge with today's live data and technicals
+        # Build enriched stats
+        
+        pf_display = portfolio_df.copy()
+        pf_display["Live Price"] = 0.0
+        pf_display["Signal"] = "HOLD"
+        pf_display["Stop Loss"] = 0.0
+        pf_display["Target"] = 0.0
+        
+        # Merge market_df and all_symbols_master_df
+        ltp_map = dict(zip(market_df["symbol"], market_df["ltp"]))
+        
+        for idx, row in pf_display.iterrows():
+            sym = row["symbol"]
+            pf_display.at[idx, "Live Price"] = ltp_map.get(sym, row["buy_price"])
+            
+            # Fetch signal info if exists
+            match = all_symbols_master_df[all_symbols_master_df["symbol"] == sym]
+            if not match.empty:
+                pf_display.at[idx, "Signal"] = match.iloc[0]["signal"]
+                pf_display.at[idx, "Stop Loss"] = match.iloc[0]["stop_loss"]
+                pf_display.at[idx, "Target"] = match.iloc[0]["target_price"]
+        
+        pf_display["Total Investment"] = pf_display["buy_price"] * pf_display["quantity"]
+        pf_display["Current Value"] = pf_display["Live Price"] * pf_display["quantity"]
+        pf_display["P&L (NPR)"] = pf_display["Current Value"] - pf_display["Total Investment"]
+        pf_display["P&L (%)"] = (pf_display["P&L (NPR)"] / pf_display["Total Investment"]) * 100
+        
+        st.metric("Total Portfolio Value", f"NPR {pf_display['Current Value'].sum():,.2f}", f"{pf_display['P&L (NPR)'].sum():,.2f} NPR")
+        
+        # Display the portfolio table
+        cols_to_show = ["id", "symbol", "quantity", "buy_price", "Live Price", "P&L (NPR)", "P&L (%)", "Signal", "Stop Loss", "Target", "date_added"]
+        show_df = pf_display[cols_to_show].rename(
+            columns={
+                "id": "Trade ID",
+                "symbol": "Symbol",
+                "quantity": "Qty",
+                "buy_price": "Buy Price",
+                "date_added": "Date Added"
+            }
+        )
+        st.dataframe(show_df, width="stretch", hide_index=True)
+        
+        st.subheader("Manage Trades")
+        del_col1, del_col2 = st.columns([1, 3])
+        trade_to_delete = del_col1.number_input("Trade ID to remove", min_value=0, step=1, value=0)
+        if del_col1.button("Remove Trade"):
+            if trade_to_delete > 0:
+                remove_trade(trade_to_delete)
+                st.success(f"Removed Trade ID {trade_to_delete}")
+                st.rerun()
 
 with tab_market:
     st.metric("Total Scrips", len(analyzed_df))
@@ -675,7 +775,7 @@ with tab_symbol:
     )
 
 with tab_all:
-    st.subheader("Daily Buy/Sell List for All Symbols")
+    st.subheader("All Symbols Technical Analysis")
     st.caption(
         "Simple meaning: BUY = possible entry, SELL = possible exit/avoid, HOLD = wait. "
         "Stop Loss means where to exit if trade goes wrong."
@@ -684,7 +784,7 @@ with tab_all:
     all_symbols_df = all_symbols_master_df.copy()
 
     if all_symbols_error:
-        st.error(f"Could not load Daily All Symbols data: {all_symbols_error}")
+        st.error(f"Could not load All Symbols Technical Analysis data: {all_symbols_error}")
 
     if all_symbols_df.empty:
         st.warning("No symbol data is available right now. Please click Refresh data and try again.")
@@ -729,9 +829,9 @@ with tab_all:
 
         csv_data = display_df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="Download daily buy/sell list (CSV)",
+            label="Download all symbols analysis (CSV)",
             data=csv_data,
-            file_name="nepse_daily_all_symbols_signals.csv",
+            file_name="nepse_all_symbols_signals.csv",
             mime="text/csv",
         )
 
