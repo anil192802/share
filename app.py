@@ -25,11 +25,32 @@ from nepal_stock_app.technical import (
 )
 
 st.set_page_config(page_title="NEPSE Technical Analyzer", layout="wide")
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    st.title("Login")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if username == "admin" and password == "admin":
+            st.session_state.logged_in = True
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+    st.stop()
+
 st.title("NEPSE Technical Analyzer")
 st.caption("Trend, candle, and indicator-based signal engine for Nepal stocks.")
 st.info("No model can guarantee profit. Use stop loss, small position size, and discipline.")
 
 with st.sidebar:
+    st.header("User")
+    if st.button("Logout"):
+        st.session_state.logged_in = False
+        st.rerun()
+
     st.header("Market Screener")
     signal_filter = st.selectbox("Intraday Signal", ["ALL", "BUY", "SELL", "HOLD"], index=0)
     top_n = st.slider("Top rows", min_value=10, max_value=300, value=80, step=10)

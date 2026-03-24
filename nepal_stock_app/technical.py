@@ -65,6 +65,15 @@ def add_technical_indicators(history: pd.DataFrame) -> pd.DataFrame:
     df["bb_upper"] = df["sma20"] + (2 * rolling_std20)
     df["bb_lower"] = df["sma20"] - (2 * rolling_std20)
 
+    if "volume" in df.columns:
+        df["vwma20"] = (df["close"] * df["volume"]).rolling(20).sum() / df["volume"].rolling(20).sum()
+        df["vol_sma20"] = df["volume"].rolling(20).mean()
+        df["volume_breakout"] = df["volume"] > (df["vol_sma20"] * 1.5)
+    else:
+        df["vwma20"] = pd.NA
+        df["vol_sma20"] = pd.NA
+        df["volume_breakout"] = False
+
     prev_close = close.shift(1)
     tr = pd.concat(
         [
@@ -126,6 +135,8 @@ def evaluate_technical_signal(indicator_df: pd.DataFrame) -> TechnicalSignal:
     macd_signal = latest.get("macd_signal")
     bb_upper = latest.get("bb_upper")
     bb_lower = latest.get("bb_lower")
+    vwma20 = latest.get("vwma20")
+    volume_breakout = latest.get("volume_breakout")
 
     if pd.notna(close) and pd.notna(sma20):
         if close > sma20:
@@ -175,6 +186,22 @@ def evaluate_technical_signal(indicator_df: pd.DataFrame) -> TechnicalSignal:
     if bool(latest.get("hammer", False)):
         score += 1
         reasons.append("Hammer candle support")
+
+    if pd.notna(close) and pd.notna(vwma20):
+        if close > vwma20:
+            score += 1
+            reasons.append("Price above VWMA (Volume Weighted Moving Average)")
+        else:
+            score -= 1
+            reasons.append("Price below VWMA")
+
+    if pd.notna(volume_breakout) and bool(volume_breakout):
+        if pd.notna(close) and close > latest.get("open", close):
+            score += 1
+            reasons.append("Bullish High Volume Breakout")
+        elif pd.notna(close) and close < latest.get("open", close):
+            score -= 1
+            reasons.append("Bearish High Volume Selloff")
 
     if score >= 2:
         signal = "BUY"
