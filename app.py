@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
@@ -23,7 +24,11 @@ from nepal_stock_app.technical import (
     evaluate_combined_recommendation,
     evaluate_technical_signal,
 )
-from nepal_stock_app.database import init_db, add_trade, remove_trade, get_portfolio
+from nepal_stock_app.database import (
+    init_db, add_trade, remove_trade, get_portfolio, 
+    authenticate_user, create_user, set_user_session, 
+    get_user_by_session, list_users, delete_user
+)
 
 # Initialize database
 init_db()
@@ -31,16 +36,35 @@ init_db()
 st.set_page_config(page_title="NEPSE Technical Analyzer", layout="wide")
 
 if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+    # Check if a session token is set in the URL
+    if "session" in st.query_params:
+        session_token = st.query_params["session"]
+        user_name, user_is_admin = get_user_by_session(session_token)
+        if user_name:
+            st.session_state.logged_in = True
+            st.session_state.username = user_name
+            st.session_state.is_admin = user_is_admin
+        else:
+            st.session_state.logged_in = False
+    else:
+        st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
     st.title("Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
-        if username == "anil" and password == "anil":
+        is_authenticated, is_admin = authenticate_user(username, password)
+        if is_authenticated:
             st.session_state.logged_in = True
             st.session_state.username = username
+            st.session_state.is_admin = is_admin
+            
+            # Create a persistent session token
+            new_token = str(uuid.uuid4())
+            set_user_session(username, new_token)
+            st.query_params["session"] = new_token
+            
             st.rerun()
         else:
             st.error("Invalid username or password")
@@ -51,10 +75,15 @@ st.caption("Trend, candle, and indicator-based signal engine for Nepal stocks.")
 st.info("No model can guarantee profit. Use stop loss, small position size, and discipline.")
 
 with st.sidebar:
-    st.header("User")
+    st.header(f"Hello, {st.session_state.username}")
     if st.button("Logout"):
         st.session_state.logged_in = False
         st.session_state.target_tab = None
+        st.session_state.is_admin = False
+        if "session" in st.query_params:
+            del st.query_params["session"]
+        # Invalidate in DB for security
+        set_user_session(st.session_state.get("username", ""), "")
         st.rerun()
 
     st.header("Market Screener")
@@ -62,7 +91,7 @@ with st.sidebar:
     top_n = st.slider("Top rows", min_value=10, max_value=300, value=80, step=10)
 
     def on_symbol_change():
-        st.session_state.target_tab = "Symbol Technical Analysis"
+        st.session_state.active_tab_index = 2
 
     st.header("Symbol Technical")
     symbol_input = st.text_input("Symbol", value="NABIL", on_change=on_symbol_change)
@@ -473,34 +502,36 @@ with st.spinner("Loading comprehensive technicals for all symbols... this may ta
         all_symbols_error = str(e)
         all_symbols_master_df = build_fallback_all_symbols_from_market(market_df)
 
-if "target_tab" not in st.session_state:
-    st.session_state.target_tab = "My Portfolio"
+if "active_tab_index" not in st.session_state:
+    st.session_state.active_tab_index = 0
 
+tabs_names = [
+    "📈 Portfolio",
+    "📊 Market",
+    "🔍 Symbol",
+    "📋 All Symbols",
+    "🚀 Buy Tomorrow",
+    "📉 Sell Tomorrow",
+    "🏗️ Sector Wise",
+]
+if st.session_state.get("is_admin", False):
+    tabs_names.append("⚙️ Admin")
+
+# Set the active tab in st.tabs using session_state (programmatic switch logic)
+tabs = st.tabs(tabs_names)
+# Streamlit tabs don't have a direct 'index' parameter in st.tabs() itself, 
+# but we can simulate the focus if needed. Since core Streamlit st.tabs 
+# resets to index 0 on rerun unless handled, we'll keep the current approach
+# and inform the user that 'index' support is pending in Streamlit core.
+# However, the UI is restored to tabs as requested.
+
+# Re-inject analyzed_df logic
 analyzed_df = market_df.copy()
 if signal_filter != "ALL":
     analyzed_df = analyzed_df[analyzed_df["signal"] == signal_filter]
 
-tabs_names = [
-    "My Portfolio",
-    "Market Signals",
-    "Symbol Technical Analysis",
-    "All Symbols Technical Analysis",
-    "What to Buy Tomorrow",
-    "What to Sell Tomorrow",
-    "Buy Sector Wise",
-]
-
-# We use standard tabs
-tab_portfolio, tab_market, tab_symbol, tab_all, tab_buy_tomorrow, tab_sell_tomorrow, tab_buy_sector = st.tabs(
-    tabs_names
-)
-
-if st.session_state.target_tab == "Symbol Technical Analysis":
-    st.info("💡 You entered a symbol! Please click the **'Symbol Technical Analysis'** tab above to view the analysis.", icon="ℹ️")
-    # Reset target so message goes away
-    st.session_state.target_tab = "My Portfolio"
-
-with tab_portfolio:
+# Tab 0: My Portfolio
+with tabs[0]:
     st.header("My Portfolio Tracker")
     st.caption("Track your actual holdings and see live P&L and technical signals.")
     
@@ -512,11 +543,11 @@ with tab_portfolio:
             pf_qty = col3.number_input("Quantity", min_value=1, value=10, step=10)
             submitted = st.form_submit_button("Add Trade")
             if submitted:
-                add_trade("admin", pf_sym, pf_price, pf_qty)
+                add_trade(st.session_state.username, pf_sym, pf_price, pf_qty)
                 st.success(f"Added {pf_qty} shares of {pf_sym} at {pf_price}")
                 st.rerun()
                 
-    portfolio_df = get_portfolio("admin")
+    portfolio_df = get_portfolio(st.session_state.username)
     if portfolio_df.empty:
         st.info("Your portfolio is empty. Add a trade to start tracking.")
     else:
@@ -572,7 +603,8 @@ with tab_portfolio:
                 st.success(f"Removed Trade ID {trade_to_delete}")
                 st.rerun()
 
-with tab_market:
+with tabs[1]:
+    st.header("NEPSE Market Screener")
     st.metric("Total Scrips", len(analyzed_df))
     summary = analyzed_df["signal"].value_counts().rename_axis("signal").reset_index(name="count")
     st.subheader("Signal Summary")
@@ -587,7 +619,8 @@ with tab_market:
         hide_index=True,
     )
 
-with tab_symbol:
+with tabs[2]:
+    st.header("Symbol Technical Analysis")
     if not symbol_input.strip():
         st.warning("Enter a symbol in the sidebar to run technical analysis.")
         st.stop()
@@ -774,7 +807,8 @@ with tab_symbol:
         hide_index=True,
     )
 
-with tab_all:
+# Tab 3: All Symbols
+with tabs[3]:
     st.subheader("All Symbols Technical Analysis")
     st.caption(
         "Simple meaning: BUY = possible entry, SELL = possible exit/avoid, HOLD = wait. "
@@ -835,7 +869,8 @@ with tab_all:
             mime="text/csv",
         )
 
-with tab_buy_tomorrow:
+# Tab 4: Buy Tomorrow
+with tabs[4]:
     st.subheader("What to Buy Tomorrow")
     st.caption("Symbols with BUY signal from current technical engine for next-session planning.")
 
@@ -911,7 +946,8 @@ with tab_buy_tomorrow:
                 hide_index=True,
             )
 
-with tab_sell_tomorrow:
+# Tab 5: Sell Tomorrow
+with tabs[5]:
     st.subheader("What to Sell Tomorrow")
     st.caption("Symbols with SELL signal from current technical engine for next-session planning.")
 
@@ -987,7 +1023,8 @@ with tab_sell_tomorrow:
                 hide_index=True,
             )
 
-with tab_buy_sector:
+# Tab 6: Multi-sector
+with tabs[6]:
     st.subheader("Buy Sector Wise")
     st.caption("Daily list with one top symbol per NEPSE sector, quantity fixed to 1 share.")
 
@@ -1079,8 +1116,45 @@ with tab_buy_sector:
                     "buy_qty",
                     "estimated_amount",
                     "reason",
+
                 ]
             ],
             width="stretch",
             hide_index=True,
         )
+
+# Tab Admin
+if st.session_state.get("is_admin", False):
+    with tabs[7]:
+        st.header("User Management Panel")
+    st.info("As an administrator, you can manage user accounts and their portfolios.")
+
+    with st.expander("➕ Create New User"):
+        with st.form("create_user_form", clear_on_submit=True):
+            un = st.text_input("Username")
+            pw = st.text_input("Password", type="password")
+            if st.form_submit_button("Create User"):
+                if un and pw:
+                    success, msg = create_user(un, pw)
+                    if success: st.success(msg)
+                    else: st.error(msg)
+                else: st.error("Please provide both username and password")
+
+    st.subheader("System Users")
+    user_records = list_users()
+    if user_records:
+        user_list_display = [{"Username": u[0], "Role": "Admin" if u[1] else "User"} for u in user_records]
+        st.table(pd.DataFrame(user_list_display))
+
+        with st.expander("🗑️ Delete User"):
+            delete_candidates = [u[0] for u in user_records if u[0] != st.session_state.username]
+            if delete_candidates:
+                target_u = st.selectbox("Select User to Delete", delete_candidates)
+                if st.checkbox(f"Confirm deletion of {target_u}"):
+                    if st.button("Delete Permanently"):
+                        ok_del, msg_del = delete_user(target_u)
+                        if ok_del:
+                            st.success(msg_del)
+                            st.rerun()
+                        else: st.error(msg_del)
+            else: st.info("No other users available to delete.")

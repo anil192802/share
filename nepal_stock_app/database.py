@@ -17,8 +17,96 @@ def init_db():
             date_added TEXT NOT NULL
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            is_admin BOOLEAN NOT NULL DEFAULT 0,
+            session_token TEXT
+        )
+    ''')
+    
+    # Check if session_token column exists in case db was already created
+    cursor.execute("PRAGMA table_info(users);")
+    columns = [col[1] for col in cursor.fetchall()]
+    if "session_token" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN session_token TEXT;")
+    
+    # insert default admin if not exists
+    cursor.execute("SELECT id FROM users WHERE username = 'anil'")
+    if not cursor.fetchone():
+        cursor.execute('''
+            INSERT INTO users (username, password, is_admin)
+            VALUES ('anil', 'intelceleron', 1)
+        ''')
+        
     conn.commit()
     conn.close()
+
+def authenticate_user(username, password):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_admin FROM users WHERE username = ? AND password = ?", (username, password))
+    user = cursor.fetchone()
+    conn.close()
+    if user:
+        return True, bool(user[0])
+    return False, False
+
+def set_user_session(username, token):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET session_token = ? WHERE username = ?", (token, username))
+    conn.commit()
+    conn.close()
+
+def get_user_by_session(token):
+    if not token:
+        return None, False
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, is_admin FROM users WHERE session_token = ?", (token,))
+    user = cursor.fetchone()
+    conn.close()
+    if user:
+        return user[0], bool(user[1])
+    return None, False
+
+def create_user(username, password):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO users (username, password, is_admin) VALUES (?, ?, 0)", (username, password))
+        conn.commit()
+        conn.close()
+        return True, "User created successfully"
+    except sqlite3.IntegrityError:
+        return False, "Username already exists"
+    except Exception as e:
+        return False, str(e)
+
+def delete_user(username):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        # Delete user's portfolio trades first
+        cursor.execute("DELETE FROM portfolio WHERE username = ?", (username,))
+        # Delete the user
+        cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+        conn.commit()
+        conn.close()
+        return True, f"User {username} deleted successfully"
+    except Exception as e:
+        return False, str(e)
+
+def list_users():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, is_admin FROM users")
+    users = cursor.fetchall()
+    conn.close()
+    return users
 
 def add_trade(username: str, symbol: str, buy_price: float, quantity: int):
     conn = sqlite3.connect(DB_PATH)
