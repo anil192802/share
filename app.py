@@ -251,7 +251,8 @@ def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame)
     market_cols = market_frame[["symbol", "sector", "signal", "score", "confidence", "ltp", "reason"]].copy()
     
     # Rename for professional clarity instead of cryptic m_ prefixed names
-    market_cols.columns = ["symbol", "Sector", "AI_Signal", "AI_Score", "AI_Confidence", "Live_Price", "AI_Logic"]
+    # Ensure nested labels don't conflict with main technical 'signal'
+    market_cols.columns = ["symbol", "Sector", "AI_Intraday_Signal", "AI_Intraday_Score", "AI_Confidence", "Live_Price", "AI_Logic"]
     
     enriched = all_symbols_df.merge(market_cols, on="symbol", how="left")
     enriched["Sector"] = enriched["Sector"].fillna("Others")
@@ -262,6 +263,7 @@ def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame)
         "today_ltp": "Current Price",
         "latest_close": "Last Close Price",
         "signal": "Trend Prediction",
+        "AI_Intraday_Signal": "Intraday AI Advice",
         "technical_score": "Safety Score",
         "confidence": "Accuracy (%)",
         "AI_Confidence": "AI Confidence (%)",
@@ -276,7 +278,7 @@ def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame)
     }
     # REORDER COLUMNS for better UX (AI confidence and 7D price after accuracy)
     column_order = [
-        "Company Scrip", "Current Price", "Trend Prediction", "Safety Score", 
+        "Company Scrip", "Current Price", "Trend Prediction", "Intraday AI Advice", "Safety Score", 
         "Accuracy (%)", "AI Confidence (%)", "Expected Price (7 Days)",
         "Buying Point", "Safety Exit (Stop Loss)", "Selling Goal", 
         "Profit/Risk Ratio", "Sector", "Expert Tip", "Action to Take", "Analysis Basis"
@@ -374,7 +376,7 @@ def market_summary_fragment():
         st.session_state.available_symbols = sorted(market_df["symbol"].unique().tolist()) if not market_df.empty else ["NABIL"]
 
 # 2. Deep Market Technicals (Progressive & Parallel)
-def load_deep_technicals():
+def load_deep_technicals(filter_trend: str = None):
     if "all_symbols_master_df" not in st.session_state or st.session_state.get("refresh_heavy", False):
         all_symbols = st.session_state.available_symbols
         # Progress Tracking setup
@@ -396,9 +398,15 @@ def load_deep_technicals():
                     
                     # Update the UI progressively
                     current_df = pd.concat(all_results)
+                    
+                    # Apply UI filter if loading from a specific tab
+                    display_df = current_df
+                    if filter_trend:
+                        display_df = current_df[current_df["Trend Prediction"] == filter_trend]
+                        
                     progress = (len(current_df) / len(all_symbols))
                     status.update(label=f"📡 Analyzed {len(current_df)}/{len(all_symbols)} symbols...")
-                    table_container.dataframe(current_df.head(top_n), use_container_width=True)
+                    table_container.dataframe(display_df.head(top_n), use_container_width=True)
             
             st.session_state.all_symbols_master_df = pd.concat(all_results)
             st.session_state.refresh_heavy = False
@@ -433,6 +441,23 @@ if selected_nav == "Market (Intraday Transaction)":
     st.subheader("Deep Market Intelligence")
     st.caption("AI-powered technical indicators for all NEPSE stocks.")
     
+    # 🏹 MARKET BREADTH GAUGE (Professional Analyst View)
+    if not market_df.empty:
+        adv = len(market_df[market_df["ltp"] > market_df.get("latest_close", 0)]) if "latest_close" in market_df.columns else 0
+        dec = len(market_df[market_df["ltp"] < market_df.get("latest_close", 100000)]) if "latest_close" in market_df.columns else 0
+        unc = len(market_df) - adv - dec
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("📈 ADVANCERS", adv, delta=f"+{adv}" if adv > 0 else None, delta_color="normal")
+        m2.metric("📉 DECLINERS", dec, delta=f"-{dec}" if dec > 0 else None, delta_color="inverse")
+        m3.metric("⚪ UNCHANGED", unc)
+        
+        # Market Health Ratio (Professional Sentiment Indicator)
+        if (adv + dec) > 0:
+            health_ratio = (adv / (adv + dec)) * 100
+            health_status = "Bullish" if health_ratio > 60 else "Bearish" if health_ratio < 40 else "Neutral"
+            m4.metric("📊 MARKET HEALTH", f"{health_ratio:.1f}%", help=f"Sentiment is {health_status} based on breadth.")
+
     # Run the heavy loading process
     load_deep_technicals()
     
@@ -440,14 +465,24 @@ if selected_nav == "Market (Intraday Transaction)":
     deep_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
     
     if not deep_df.empty:
+        # Professional Setup Filtering (Find the needle in the haystack)
+        st.write("---")
+        with st.expander("🔍 ADVANCED SCREENER", expanded=True):
+            f1, f2, f3 = st.columns(3)
+            filter_sig = f1.multiselect("Scan For Signal", ["BUY", "SELL", "HOLD"], default=["BUY", "SELL"])
+            min_conf = f2.slider("Min Accuracy (%)", 0, 90, 70)
+            sector_filter = f3.multiselect("Sector Filter", sorted(deep_df["Sector"].unique()))
+            
+            filtered_df = deep_df[deep_df["AI_Signal"].isin(filter_sig)]
+            filtered_df = filtered_df[filtered_df["AI_Confidence"] >= min_conf]
+            if sector_filter:
+                filtered_df = filtered_df[filtered_df["Sector"].isin(sector_filter)]
+
         # Display filtering/sorting metrics
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Stocks", len(deep_df))
-        c2.metric("Buy Signals", len(deep_df[deep_df['AI_Signal'] == 'BUY']))
-        c3.metric("Sell Signals", len(deep_df[deep_df['AI_Signal'] == 'SELL']))
-        
-        # SEARCH AND FILTER ROW
-        # We can add a simple filter if needed, but the dataframe search is usually enough
+        c1.metric("Opportunities Found", len(filtered_df), delta=f"{len(deep_df) - len(filtered_df)} filtered")
+        c2.metric("High Acc. Buy", len(filtered_df[filtered_df['AI_Signal'] == 'BUY']))
+        c3.metric("High Acc. Sell", len(filtered_df[filtered_df['AI_Signal'] == 'SELL']))
         
         # CSS to fix the dataframe container for full-page scrolling
         st.markdown("""
@@ -461,9 +496,9 @@ if selected_nav == "Market (Intraday Transaction)":
         
         # Render the final dataframe without internal scrolls
         st.dataframe(
-            deep_df.sort_values(by="AI_Score", ascending=False).head(top_n),
+            filtered_df.sort_values(by="AI_Score", ascending=False).head(top_n),
             use_container_width=True,
-            height=int(top_n * 35 * 2) if top_n > 0 else 800, # 200% larger assuming 35px per row
+            height=int(len(filtered_df) * 35 * 2) if len(filtered_df) > 0 else 800, 
             hide_index=True
         )
     else:
@@ -475,6 +510,33 @@ elif selected_nav == "Portfolio":
         st.subheader("Your Active Investments")
         st.caption("Real-time valuation based on latest MeroLagani prices.")
     
+    # FETCH PORTFOLIO DATA EARLY FOR ANALYSIS
+    pf = get_portfolio(st.session_state.username)
+    
+    # 💎 PROFESSIONAL SECTOR DIVERSIFICATION (Risk Analyst Tool)
+    if not pf.empty:
+        # Merge sectors from market_df
+        pf_with_sectors = pf.merge(market_df[['symbol', 'sector']], on='symbol', how='left')
+        sector_dist = pf_with_sectors.groupby('sector')['quantity'].count().reset_index()
+        
+        with st.expander("🛡️ DIVERSIFICATION ANALYSIS", expanded=False):
+            st.write("Professional traders recommend no more than 20% exposure per sector.")
+            d1, d2 = st.columns([2, 1])
+            import plotly.express as px
+            fig = px.pie(sector_dist, values='quantity', names='sector', hole=.4, 
+                         title="Sector-wise Exposure", color_discrete_sequence=px.colors.sequential.RdBu)
+            fig.update_layout(showlegend=False, margin=dict(t=30, b=0, l=0, r=0))
+            d1.plotly_chart(fig, use_container_width=True)
+            
+            # Exposure Warnings
+            total_count = len(pf)
+            for _, r in sector_dist.iterrows():
+                pct = (r['quantity'] / total_count) * 100
+                if pct > 35:
+                    d2.warning(f"⚠️ **High Exposure**: You are {pct:.1f}% concentrated in **{r['sector']}**.")
+                elif pct > 20:
+                    d2.info(f"💡 **Balanced**: {pct:.1f}% in **{r['sector']}**.")
+
     with st.expander("💼 ADD A NEW TRADE", expanded=False):
         with st.form("trade_form", clear_on_submit=True):
             f1, f2, f3 = st.columns([2, 1, 1])
@@ -646,6 +708,19 @@ elif selected_nav == "Symbol":
             
             st.subheader("Technical Decision")
             st.info(f"Action: {sig.beginner_action} | Note: {sig.simple_note}")
+            
+            # --- PIVOT POINTS (Level Analysis) ---
+            if sig.pivot_points:
+                st.write("---")
+                st.caption("### 🎯 Professional Pivot Levels (Daily)")
+                pa1, pa2, pa3, pa4, pa5 = st.columns(5)
+                pa1.metric("S2", f"{sig.pivot_points['S2']:.1f}")
+                pa2.metric("S1", f"{sig.pivot_points['S1']:.1f}")
+                pa3.metric("PIVOT", f"{sig.pivot_points['PP']:.1f}", help="Neutral central price point.")
+                pa4.metric("R1", f"{sig.pivot_points['R1']:.1f}")
+                pa5.metric("R2", f"{sig.pivot_points['R2']:.1f}")
+                st.write("---")
+
             st.write(f"Reason: {sig.reason}")
         except Exception as e:
             st.error(f"Error loading {q_sym}: {e}")
@@ -653,19 +728,39 @@ elif selected_nav == "Symbol":
 elif selected_nav == "All Symbols":
     load_deep_technicals()
     total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
-    st.dataframe(total_df, use_container_width=True, hide_index=True)
+    if not total_df.empty:
+        st.success(f"Analysed {len(total_df)} Stocks Portfolio-wide.")
+        st.dataframe(total_df, use_container_width=True, hide_index=True, height=800)
+    else:
+        st.warning("Please wait for market analysis to complete.")
 
 elif selected_nav == "Buy Tomorrow":
-    load_deep_technicals()
+    load_deep_technicals(filter_trend="BUY")
     total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
-    buy_list = total_df[total_df["signal"] == "BUY"].sort_values("confidence", ascending=False)
-    st.dataframe(buy_list, use_container_width=True, hide_index=True)
+    if not total_df.empty:
+        # STRICT FILTER: Only show BUY signals in this tab
+        buy_list = total_df[total_df["Trend Prediction"] == "BUY"].sort_values("Accuracy (%)", ascending=False)
+        if not buy_list.empty:
+            st.success(f"Found {len(buy_list)} Stocks with BUY signals for tomorrow.")
+            st.dataframe(buy_list, use_container_width=True, hide_index=True, height=800)
+        else:
+            st.info("No BUY signals detected for tomorrow.")
+    else:
+        st.warning("Please wait for market analysis to complete.")
 
 elif selected_nav == "Sell Tomorrow":
-    load_deep_technicals()
+    load_deep_technicals(filter_trend="SELL")
     total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
-    sell_list = total_df[total_df["signal"] == "SELL"].sort_values("confidence", ascending=False)
-    st.dataframe(sell_list, use_container_width=True, hide_index=True)
+    if not total_df.empty:
+        # STRICT FILTER: Only show SELL signals in this tab
+        sell_list = total_df[total_df["Trend Prediction"] == "SELL"].sort_values("Accuracy (%)", ascending=False)
+        if not sell_list.empty:
+            st.error(f"Found {len(sell_list)} Stocks with SELL signals for tomorrow.")
+            st.dataframe(sell_list, use_container_width=True, hide_index=True, height=800)
+        else:
+            st.info("No SELL signals detected for tomorrow.")
+    else:
+        st.warning("Please wait for market analysis to complete.")
 
 elif selected_nav == "Sector Wise":
     load_deep_technicals()

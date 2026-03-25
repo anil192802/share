@@ -15,6 +15,7 @@ class TechnicalSignal:
     stop_loss: float | None = None
     target_price: float | None = None
     expected_7d_price: float | None = None
+    pivot_points: dict[str, float] | None = None 
     simple_note: str = ""
     beginner_action: str = ""
     risk_reward_ratio: float | None = None
@@ -266,6 +267,19 @@ def evaluate_technical_signal(indicator_df: pd.DataFrame) -> TechnicalSignal:
         if risk > 0:
             risk_reward_ratio = reward / risk
 
+    # --- PIVOT POINTS CALCULATION (Professional Levels) ---
+    pivots = None
+    h, l, c = latest.get("high"), latest.get("low"), latest.get("close")
+    if pd.notna(h) and pd.notna(l) and pd.notna(c):
+        pp = (h + l + c) / 3
+        pivots = {
+            "PP": pp,
+            "R1": (2 * pp) - l,
+            "S1": (2 * pp) - h,
+            "R2": pp + (h - l),
+            "S2": pp - (h - l)
+        }
+
     return TechnicalSignal(
         signal=signal,
         score=score,
@@ -275,6 +289,7 @@ def evaluate_technical_signal(indicator_df: pd.DataFrame) -> TechnicalSignal:
         stop_loss=stop_loss,
         target_price=target_price,
         expected_7d_price=expected_7d_price,
+        pivot_points=pivots,
         simple_note=simple_note,
         beginner_action=beginner_action,
         risk_reward_ratio=risk_reward_ratio,
