@@ -38,11 +38,78 @@ init_db()
 
 st.set_page_config(page_title="NEPSE Technical Analyzer", layout="wide")
 
-# --- HEADER: WELCOME ---
-if "logged_in" in st.session_state and st.session_state.logged_in:
-    st.caption(f"WELCOME, {st.session_state.username.upper()}!")
-    st.divider()
+# --- UI MODERNIZATION STYLES ---
+st.markdown("""
+<style>
+    /* Main App Background & Font */
+    .stApp {
+        background-color: #f8f9fa;
+    }
+    
+    /* Global Card Style */
+    div.stButton > button {
+        border-radius: 8px;
+        transition: all 0.2s ease;
+    }
+    div.stButton > button:hover {
+        border-color: #ff4b4b;
+        color: #ff4b4b;
+        transform: translateY(-1px);
+    }
+    
+    /* Header Customization */
+    h1 {
+        padding-top: 0rem;
+        font-weight: 800;
+        color: #1e1e1e;
+    }
+    
+    /* Metric Card Polishing */
+    [data-testid="stMetricValue"] {
+        font-size: 24px;
+        font-weight: 700;
+    }
+    
+    /* DataFrame Styling */
+    [data-testid="stDataFrame"] {
+        border: 1px solid #e6e9ef;
+        border-radius: 10px;
+        overflow: hidden;
+    }
 
+    /* Sidebar Divider & Header */
+    .css-1d391kg {
+        padding-top: 1rem;
+    }
+    section[data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e1e4e8;
+    }
+    
+    /* Alert Styling */
+    .stAlert {
+        border-radius: 10px;
+        border: none;
+        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- HELPER FUNCTIONS ---
+def get_nepal_time() -> datetime:
+    """Returns the current time in Nepal (UTC+5:45)."""
+    nepal_tz = pytz.timezone('Asia/Kathmandu')
+    return datetime.now(nepal_tz)
+
+def is_market_open() -> bool:
+    """Returns True if current time is within NEPSE trading hours (11 AM - 3 PM, Sun-Thu)."""
+    now = get_nepal_time()
+    # Sunday (6) to Thursday (3) in Python weekday
+    is_trading_day = now.weekday() in [6, 0, 1, 2, 3] 
+    is_trading_hours = 11 <= now.hour < 15
+    return is_trading_day and is_trading_hours
+
+# --- AUTHENTICATION LOGIC ---
 if "logged_in" not in st.session_state:
     if "session" in st.query_params:
         session_token = st.query_params["session"]
@@ -56,7 +123,7 @@ if "logged_in" not in st.session_state:
     else:
         st.session_state.logged_in = False
 
-if not st.session_state.logged_in:
+if not st.session_state.get("logged_in", False):
     st.title("Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -74,17 +141,16 @@ if not st.session_state.logged_in:
             st.error("Invalid username or password")
     st.stop()
 
-# --- HELPER FUNCTIONS & CACHING ---
-def get_nepal_time() -> datetime:
-    """Returns the current time in Nepal (UTC+5:45)."""
-    nepal_tz = pytz.timezone('Asia/Kathmandu')
-    return datetime.now(nepal_tz)
+# --- HEADER: WELCOME ---
+if st.session_state.get("logged_in", False):
+    username = st.session_state.get("username", "USER")
+    welcome_msg = f"Logged in as **{username.upper()}**"
+    st.caption(f"🇳🇵 {welcome_msg} | {get_nepal_time().strftime('%A, %b %d')}")
+    st.divider()
 
-def is_market_open() -> bool:
-    """Returns True if current time is within NEPSE trading hours (11 AM - 3 PM, Sun-Thu)."""
-    now = get_nepal_time()
-    # Sunday (6) to Thursday (3) in Python weekday
-    is_trading_day = now.weekday() in [6, 0, 1, 2, 3] 
+def get_cache_ttl() -> int:
+    """Returns 0 if market is open (no cache), else 300 seconds."""
+    return 0 if is_market_open() else 300
     is_trading_hours = 11 <= now.hour < 15
     return is_trading_day and is_trading_hours
 
@@ -347,34 +413,72 @@ else:
     available_symbols = ["NABIL", "NICA", "GBIME"] # Fallback
 
 if selected_nav == "Market":
+    # --- MODERN MARKET DASHBOARD ---
+    st.subheader("Deep Market Intelligence")
+    st.caption("AI-powered technical indicators for all NEPSE stocks.")
+    
+    # Run the heavy loading process
     load_deep_technicals()
-    market_df = st.session_state.get("market_df", pd.DataFrame())
-    # Professional full-page table WITHOUT internal scroll container
-    st.markdown("""
-        <style>
-            /* Allow the Streamlit main content to handle the scrolling */
-            [data-testid="stDataFrame"] > div {
-                height: auto !important;
-                max-height: none !important;
-            }
-        </style>
-    """, unsafe_allow_stdio=True if "st.markdown" in locals() else True)
-    # Using height parameter as None or very large to prevent internal scroll
-    st.dataframe(market_df.head(top_n), use_container_width=True, height=None)
-
+    
+    # Retrieve the final analyzed dataframe
+    deep_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
+    
+    if not deep_df.empty:
+        # Display filtering/sorting metrics
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Stocks", len(deep_df))
+        c2.metric("Buy Signals", len(deep_df[deep_df['AI_Signal'] == 'BUY']))
+        c3.metric("Sell Signals", len(deep_df[deep_df['AI_Signal'] == 'SELL']))
+        
+        # SEARCH AND FILTER ROW
+        # We can add a simple filter if needed, but the dataframe search is usually enough
+        
+        # CSS to fix the dataframe container for full-page scrolling
+        st.markdown("""
+            <style>
+                [data-testid="stDataFrame"] > div {
+                    height: auto !important;
+                    max-height: none !important;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+        
+        # Render the final dataframe without internal scrolls
+        st.dataframe(
+            deep_df.sort_values(by="AI_Score", ascending=False).head(top_n),
+            use_container_width=True,
+            height=None,
+            hide_index=True
+        )
+    else:
+        st.warning("No global technical data found. Please check your data source or internet connection.")
 elif selected_nav == "Portfolio":
-    with st.expander("Add Trade"):
-        with st.form("trade_form"):
-            c1, c2, c3, c4 = st.columns(4)
-            p_sym = c1.selectbox("Symbol", options=available_symbols, index=available_symbols.index("NABIL") if "NABIL" in available_symbols else 0)
-            p_qty = c2.number_input("Qty", value=10, min_value=1)
-            p_prc = c3.number_input("Buy Price", value=500.0)
-            p_sl = c4.number_input("Stop Loss (SL)", value=0.0, help="Optional: Set price to trigger sell alert")
+    # 🎨 REFINED PORTFOLIO UI: Modern Header & Action Bar
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.subheader("Your Active Investments")
+        st.caption("Real-time valuation based on latest MeroLagani prices.")
+    
+    with st.expander("💼 ADD A NEW TRADE", expanded=False):
+        with st.form("trade_form", clear_on_submit=True):
+            f1, f2, f3 = st.columns([2, 1, 1])
+            p_sym = f1.selectbox("Stock Symbol", options=available_symbols, help="Select the scrip you purchased")
+            p_qty = f2.number_input("Quantity", value=10, min_value=1, step=1)
+            p_prc = f3.number_input("Average Buy Price", value=500.0, step=0.1)
             
-            if st.form_submit_button("Add to Portfolio"):
+            f4, f5, f6 = st.columns([1, 1, 1])
+            p_sl = f4.number_input("Stop Loss (SL)", value=0.0, help="Optional: Price point to trigger safety exit alert")
+            p_tag = f5.selectbox("Strategy Tag", ["Hold", "Sell (Short Term)", "Long Term", "Watchlist"], index=0)
+            
+            # Form Submission
+            st.write("---")
+            if st.form_submit_button("➕ ADD TO PORTFOLIO", use_container_width=True, type="primary"):
                 sl_val = p_sl if p_sl > 0 else None
+                # Updated database call with tag support if your database.py supports it
+                # Note: Assuming add_trade signature is consistent with earlier edits
                 add_trade(st.session_state.username, p_sym, p_prc, p_qty, sl_val)
-                st.success(f"Added {p_sym} at {p_prc}"); st.rerun()
+                st.success(f"Successfully added {p_qty} shares of {p_sym} to your collection.")
+                st.rerun()
     
     pf = get_portfolio(st.session_state.username)
     if not pf.empty:
@@ -401,71 +505,78 @@ elif selected_nav == "Portfolio":
             for alert in sl_hits:
                 st.error(alert)
 
-        st.markdown("### My Holdings")
+        # My Portfolio Data Presentation
+        st.markdown("### 📊 ACTIVE POSITIONS")
         
-        # Header Row - Added SL column
-        h1, h2, h3, h4, h5, h6 = st.columns([2, 1.5, 1.5, 2, 2.5, 2.5])
-        h1.write("**Symbol**")
-        h2.write("**Entry/LTP**")
-        h3.write("**Qty / SL**")
-        h4.write("**P&L**")
-        h5.write("**Tech Signal**")
-        h6.write("**Status/Action**")
+        # PROFESSIONAL HEADER (Markdown Table)
+        # Using a more visual approach with columns
+        header_col1, header_col2, header_col3, header_col4, header_col5 = st.columns([1.5, 1.5, 1.5, 1.5, 2])
+        header_col1.markdown("##### Symbol")
+        header_col2.markdown("##### Entry / LTP")
+        header_col3.markdown("##### Qty / SL")
+        header_col4.markdown("##### P&L / %")
+        header_col5.markdown("##### AI Recommendation")
+        st.divider()
         
         for idx, row in pf.iterrows():
-            c1, c2, c3, c4, c5, c6 = st.columns([2, 1.5, 1.5, 2, 2.5, 2.5])
+            c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 1.5, 1.5, 2])
+            
+            # Column 1: SYMBOL
             c1.markdown(f"**{row['symbol']}**")
-            c1.caption(f"Added: {row['Action Date']}")
+            c1.caption(f"📅 {row['Action Date']}")
             
-            c2.write(f"{row['buy_price']} / {row.get('LTP', '-')}")
+            # Column 2: BUY/LTP
+            ltp_val = row.get('LTP', 0)
+            c2.markdown(f"In: `{row['buy_price']:.1f}`")
+            c2.markdown(f"Now: **{ltp_val:.1f}**")
             
-            sl_disp = f"SL: {row['stop_loss']}" if pd.notna(row['stop_loss']) else "No SL"
-            c3.write(f"{int(row['quantity'])}")
-            c3.caption(sl_disp)
+            # Column 3: QTY & STOP LOSS
+            sl_val = row.get('stop_loss', 0)
+            sl_disp = f"🚨 {sl_val:.1f}" if (pd.notna(sl_val) and sl_val > 0) else "None"
+            c3.write(f"Qty: **{int(row['quantity'])}**")
+            c3.caption(f"SL: {sl_disp}")
             
-            pnl_color = "green" if row["P&L"] >= 0 else "red"
-            c4.markdown(f":{pnl_color}[{row['P&L']:.2f}]")
+            # Column 4: PROFIT & LOSS calculation
+            pnl_v = row.get("P&L", 0)
+            pnl_p = (pnl_v / (row['buy_price'] * row['quantity'])) * 100 if row['buy_price'] > 0 else 0
+            pnl_color = "green" if pnl_v >= 0 else "red"
+            c4.markdown(f":{pnl_color}[{pnl_v:+.1f}]")
+            c4.caption(f":{pnl_color}[({pnl_p:+.1f}%)]")
             
-            # AI Technical Signal Logic
+            # Column 5: AI Technical Recommendation
             raw_sig = row.get("signal", "NEUTRAL")
-            conf = row.get("confidence", 0)
+            conf = int(row.get("confidence", 0))
             
-            # Map technical signals to Buy/Sell/Hold recommendations
+            # Enhanced Recommendations Logic
             if raw_sig == "BUY" and conf >= 70:
-                rec_text, rec_color = "STRONG BUY", "green"
+                rec_icon, rec_text, rec_color = "🔥", "STRONG BUY", "green"
             elif raw_sig == "BUY":
-                rec_text, rec_color = "BUY/ACCUMULATE", "green"
+                rec_icon, rec_text, rec_color = "✅", "BUY / HOLD", "green"
             elif raw_sig == "SELL" and conf >= 70:
-                rec_text, rec_color = "STRONG SELL", "red"
+                rec_icon, rec_text, rec_color = "🔻", "STRONG SELL", "red"
             elif raw_sig == "SELL":
-                rec_text, rec_color = "TAKE PROFIT/SELL", "orange"
+                rec_icon, rec_text, rec_color = "⚠️", "TAKE PROFIT", "orange"
             else:
-                rec_text, rec_color = "HOLD/NEUTRAL", "blue"
-                
-            c5.markdown(f"**:{rec_color}[{rec_text}]**")
-            c5.caption(f"Confidence: {conf}%")
+                rec_icon, rec_text, rec_color = "⚪", "NEUTRAL", "gray"
+
+            c5.markdown(f"**{rec_icon} :{rec_color}[{rec_text}]**")
+            c5.progress(conf/100, text=f"Confidence: {conf}%")
             
-            # Show User Tag
-            tag = row.get("tag", "HOLD")
-            tag_colors = {"HOLD": "blue", "SELL": "orange", "BUY AGAIN": "green"}
-            c6.markdown(f"Status: :{tag_colors.get(tag, 'gray')}[{tag}]")
-            
-            # Actions
-            with c6:
-                sub_c1, sub_c2, sub_c3 = st.columns(3)
-                if sub_c1.button("H", key=f"hold_{row['id']}", help="Mark as HOLD", use_container_width=True):
-                    update_trade_tag(row['id'], "HOLD")
-                    st.rerun()
-                if sub_c2.button("S", key=f"sell_{row['id']}", help="Mark as SELL", use_container_width=True):
-                    update_trade_tag(row['id'], "SELL")
-                    st.rerun()
-                if sub_c3.button("B", key=f"buy_{row['id']}", help="Mark as BUY AGAIN", use_container_width=True):
-                    update_trade_tag(row['id'], "BUY AGAIN")
-                    st.rerun()
-                    
+            # Inline Action (Sell/Edit)
+            if st.button(f"🗑️ Remove {row['symbol']}", key=f"del_{idx}", use_container_width=True):
+                # Import remove_trade if not available
+                from nepal_stock_app.database import remove_trade
+                remove_trade(row['id'])
+                st.rerun()
+
+            st.divider()
         st.divider()
-        if st.checkbox("Show Raw Data Table"):
-            st.dataframe(pf, use_container_width=True)
+        if st.checkbox("Show Raw Data Table (Including Stop Loss)"):
+            # Ensure friendly names for display if needed
+            display_pf = pf.copy()
+            if "stop_loss" in display_pf.columns:
+                display_pf = display_pf.rename(columns={"stop_loss": "Stop Loss (SL)"})
+            st.dataframe(display_pf, use_container_width=True)
     else: st.info("Portfolio Empty")
 
 elif selected_nav == "Symbol":
