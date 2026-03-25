@@ -10,6 +10,7 @@ import pandas as pd
 import requests
 
 TODAY_SHARE_PRICE_URL = "https://www.sharesansar.com/today-share-price"
+MEROLAGANI_LIVE_MARKET_URL = "https://merolagani.com/LatestMarket.aspx"
 AJAX_TODAY_SHARE_PRICE_URL = "https://www.sharesansar.com/ajaxtodayshareprice"
 COMPANY_PAGE_URL_TEMPLATE = "https://www.sharesansar.com/company/{symbol}"
 COMPANY_PRICE_HISTORY_URL = "https://www.sharesansar.com/company-price-history"
@@ -476,6 +477,18 @@ def fetch_share_data_for_date(
 ) -> pd.DataFrame:
     cfg = config or FetchConfig()
     session = requests.Session()
+
+    # Use MeroLagani for real-time data if target_date is not specified (current day)
+    if not target_date:
+        try:
+            live_response = session.get(MEROLAGANI_LIVE_MARKET_URL, timeout=cfg.timeout_seconds, headers=_default_headers())
+            live_response.raise_for_status()
+            parsed_live = _parse_share_table(live_response.text)
+            if not parsed_live.empty:
+                return parsed_live
+        except Exception:
+            # Fallback to ShareSansar if MeroLagani fails
+            pass
 
     base_response = session.get(cfg.url, timeout=cfg.timeout_seconds, headers=_default_headers())
     base_response.raise_for_status()

@@ -74,14 +74,31 @@ if not st.session_state.logged_in:
     st.stop()
 
 # --- HELPER FUNCTIONS & CACHING ---
+def is_market_open() -> bool:
+    """Returns True if current time is within NEPSE trading hours (11 AM - 3 PM, Sun-Thu)."""
+    # Current time in Nepal is UTC+5:45
+    # We use system time if running locally in Nepal, otherwise adjust offset
+    now = datetime.now()
+    # Check if Sunday (6) to Thursday (3) in Python weekday (0=Mon, 6=Sun)
+    # Sunday=6, Monday=0, Tuesday=1, Wednesday=2, Thursday=3
+    is_trading_day = now.weekday() in [6, 0, 1, 2, 3] 
+    is_trading_hours = 11 <= now.hour < 15
+    return is_trading_day and is_trading_hours
+
+def get_cache_ttl() -> int:
+    """Returns 0 if market is open (no cache), else 300 seconds."""
+    # Logic: If market is open, bypass cache for real-time symbols
+    return 0 if is_market_open() else 300
+
 @st.cache_data(ttl=300)
 def get_analyzed_data(cache_key: str) -> pd.DataFrame:
     del cache_key
     raw = fetch_today_share_data()
     return analyze_shares(raw)
 
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=300)
 def get_symbol_history(cache_key: str, symbol: str, lookback: int) -> pd.DataFrame:
+    # Use shorter TTL during market hours if needed, or rely on cache_key change
     del cache_key
     history = fetch_symbol_history(symbol=symbol, lookback_days=lookback)
     return add_technical_indicators(history)
@@ -169,6 +186,14 @@ def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame)
 # --- SIDEBAR & STATE ---
 if "cache_key" not in st.session_state: st.session_state.cache_key = datetime.now().isoformat()
 
+# --- REAL-TIME MARKET SYNC ---
+# If market is open, force cache refresh on every interaction
+if is_market_open():
+    st.session_state.cache_key = datetime.now().isoformat()
+    st.sidebar.caption("⚡ Market Open: Live Data Active")
+else:
+    st.sidebar.caption("🌙 Market Closed")
+
 # --- SIDEBAR NAVIGATION ---
 tab_icons = {
     "Portfolio": "house", 
@@ -231,13 +256,29 @@ with st.sidebar:
     account_size = st.number_input("Capital (NPR)", value=100000.0)
     risk_percent = st.slider("Risk (%)", 0.5, 5.0, 1.0)
     
-# --- DATA FETCHING ---
-with st.status("Fetching NEPSE data...", expanded=False) as status:
-    market_df = get_analyzed_data(st.session_state.cache_key)
-    status.update(label="Analyzing all symbols...", state="running")
-    raw_all_df = get_all_symbols_technical(st.session_state.cache_key, all_lookback)
-    all_symbols_master_df = enrich_all_symbols(raw_all_df, market_df)
-    status.update(label="Data Ready!", state="complete", expanded=False)
+# --- DATA FETCHING (Professional Background Pre-fetching) ---
+# 1. Essential Market Summary (Lightweight & Fast)
+# This is required for search boxes and basic LTP info
+@st.fragment(run_every="5m" if is_market_open() else None)
+def market_summary_fragment():
+    with st.spinner("Syncing Prices..."):
+        market_df = get_analyzed_data(st.session_state.cache_key)
+        st.session_state.market_df = market_df
+        st.session_state.available_symbols = sorted(market_df["symbol"].unique().tolist()) if not market_df.empty else ["NABIL"]
+
+# 2. Deep Market Technicals (Heavy & Loaded on Demand)
+def load_deep_technicals():
+    if "all_symbols_master_df" not in st.session_state or st.session_state.get("refresh_heavy", False):
+        with st.status("Analyzing Full Market (Heavy Mode)...", expanded=False) as status:
+            raw_all_df = get_all_symbols_technical(st.session_state.cache_key, all_lookback)
+            st.session_state.all_symbols_master_df = enrich_all_symbols(raw_all_df, st.session_state.market_df)
+            st.session_state.refresh_heavy = False
+            status.update(label="Full Market Analysis Ready!", state="complete")
+
+# Execute lightweight fetch immediately (Non-blocking for UI layout)
+market_summary_fragment()
+market_df = st.session_state.get("market_df", pd.DataFrame())
+available_symbols = st.session_state.get("available_symbols", ["NABIL"])
 
 # --- CONTENT RENDERING ---
 tab_titles = {
@@ -258,6 +299,8 @@ else:
     available_symbols = ["NABIL", "NICA", "GBIME"] # Fallback
 
 if selected_nav == "Market":
+    load_deep_technicals()
+    market_df = st.session_state.get("market_df", pd.DataFrame())
     st.dataframe(market_df.head(top_n), use_container_width=True)
 
 elif selected_nav == "Portfolio":
@@ -362,6 +405,16 @@ elif selected_nav == "Symbol":
     if q_sym:
         try:
             hist = get_symbol_history(st.session_state.cache_key, q_sym, lookback_days)
+            
+            # --- REAL-TIME PRICE SYNC FOR SYMBOL PAGE ---
+            # Historical data might be 1 day old, whereas market_df is live.
+            live_row = market_df[market_df["symbol"] == q_sym]
+            if not live_row.empty:
+                live_price = live_row.iloc[0]["ltp"]
+                # Update the last row of hist with the live price for indicators
+                if abs(hist.iloc[-1]["close"] - live_price) > 0.1:
+                    hist.loc[hist.index[-1], "close"] = live_price
+            
             sig = evaluate_technical_signal(hist)
             c1, c2, c3 = st.columns(3)
             c1.metric("Price", f"{hist.iloc[-1]['close']:.2f}")
@@ -382,21 +435,30 @@ elif selected_nav == "Symbol":
             st.error(f"Error loading {q_sym}: {e}")
 
 elif selected_nav == "All Symbols":
-    st.dataframe(all_symbols_master_df, use_container_width=True)
+    load_deep_technicals()
+    total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
+    st.dataframe(total_df, use_container_width=True)
 
 elif selected_nav == "Buy Tomorrow":
-    buy_list = all_symbols_master_df[all_symbols_master_df["signal"] == "BUY"].sort_values("confidence", ascending=False)
+    load_deep_technicals()
+    total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
+    buy_list = total_df[total_df["signal"] == "BUY"].sort_values("confidence", ascending=False)
     st.dataframe(buy_list, use_container_width=True)
 
 elif selected_nav == "Sell Tomorrow":
-    sell_list = all_symbols_master_df[all_symbols_master_df["signal"] == "SELL"].sort_values("confidence", ascending=False)
+    load_deep_technicals()
+    total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
+    sell_list = total_df[total_df["signal"] == "SELL"].sort_values("confidence", ascending=False)
     st.dataframe(sell_list, use_container_width=True)
 
 elif selected_nav == "Sector Wise":
-    sectors = get_nepse_sector_list()
+    load_deep_technicals()
+    total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
+    # ... using total_df below ...
+    sectors = ["Commercial Banks", "Development Banks", "Finance", "Hotels", "Hydro", "Life Insurance", "Microfinance", "Non-Life Insurance", "Others"]
     picks = []
     for s in sectors:
-        match = all_symbols_master_df[all_symbols_master_df["sector"] == s].head(1)
+        match = total_df[total_df["sector"] == s].head(1)
         if not match.empty: picks.append(match.iloc[0])
     if picks:
         st.dataframe(pd.DataFrame(picks), use_container_width=True)
