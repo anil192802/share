@@ -14,9 +14,16 @@ def init_db():
             symbol TEXT NOT NULL,
             buy_price REAL NOT NULL,
             quantity INTEGER NOT NULL,
-            date_added TEXT NOT NULL
+            date_added TEXT NOT NULL,
+            tag TEXT DEFAULT 'HOLD'
         )
     ''')
+    
+    # Update existing table if tag column is missing
+    cursor.execute("PRAGMA table_info(portfolio);")
+    columns = [col[1] for col in cursor.fetchall()]
+    if "tag" not in columns:
+        cursor.execute("ALTER TABLE portfolio ADD COLUMN tag TEXT DEFAULT 'HOLD';")
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,6 +123,13 @@ def add_trade(username: str, symbol: str, buy_price: float, quantity: int):
         INSERT INTO portfolio (username, symbol, buy_price, quantity, date_added)
         VALUES (?, ?, ?, ?, ?)
     ''', (username, symbol.upper(), buy_price, quantity, date_added))
+    conn.commit()
+    conn.close()
+
+def update_trade_tag(trade_id: int, tag: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE portfolio SET tag = ? WHERE id = ?', (tag, trade_id))
     conn.commit()
     conn.close()
 

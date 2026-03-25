@@ -28,7 +28,8 @@ from nepal_stock_app.technical import (
 from nepal_stock_app.database import (
     init_db, add_trade, remove_trade, get_portfolio, 
     authenticate_user, create_user, set_user_session, 
-    get_user_by_session, list_users, delete_user
+    get_user_by_session, list_users, delete_user,
+    update_trade_tag
 )
 
 # Initialize database
@@ -272,10 +273,82 @@ elif selected_nav == "Portfolio":
     
     pf = get_portfolio(st.session_state.username)
     if not pf.empty:
+        # Pre-calculate data for display
         ltp_map = dict(zip(market_df["symbol"], market_df.get("ltp", [])))
+        
+        # Link market technical signals to portfolio
+        # we can use the market_df which already has 'signal' and 'confidence'
+        pf = pf.merge(market_df[['symbol', 'signal', 'confidence']], on='symbol', how='left')
+        
         pf["LTP"] = pf["symbol"].map(ltp_map)
         pf["P&L"] = (pf["LTP"] - pf["buy_price"]) * pf["quantity"]
-        st.dataframe(pf, use_container_width=True)
+        pf["Action Date"] = pd.to_datetime(pf["date_added"]).dt.strftime("%Y-%m-%d")
+        
+        # Display each stock as a card-like interface or rows with action buttons
+        st.markdown("### My Holdings")
+        
+        # Header Row
+        h1, h2, h3, h4, h5, h6 = st.columns([2, 1.5, 1.5, 2, 2.5, 2.5])
+        h1.write("**Symbol**")
+        h2.write("**Buy/LTP**")
+        h2.caption("Entry / Current")
+        h3.write("**Qty**")
+        h4.write("**P&L**")
+        h5.write("**Tech Signal**")
+        h5.caption("AI Analysis")
+        h6.write("**Status/Action**")
+        
+        for idx, row in pf.iterrows():
+            c1, c2, c3, c4, c5, c6 = st.columns([2, 1.5, 1.5, 2, 2.5, 2.5])
+            c1.markdown(f"**{row['symbol']}**")
+            c1.caption(f"Added: {row['Action Date']}")
+            
+            c2.write(f"{row['buy_price']} / {row.get('LTP', '-')}")
+            c3.write(str(int(row["quantity"])))
+            
+            pnl_color = "green" if row["P&L"] >= 0 else "red"
+            c4.markdown(f":{pnl_color}[{row['P&L']:.2f}]")
+            
+            # AI Technical Signal Logic
+            raw_sig = row.get("signal", "NEUTRAL")
+            conf = row.get("confidence", 0)
+            
+            # Map technical signals to Buy/Sell/Hold recommendations
+            if raw_sig == "BUY" and conf >= 70:
+                rec_text, rec_color = "STRONG BUY", "green"
+            elif raw_sig == "BUY":
+                rec_text, rec_color = "BUY/ACCUMULATE", "green"
+            elif raw_sig == "SELL" and conf >= 70:
+                rec_text, rec_color = "STRONG SELL", "red"
+            elif raw_sig == "SELL":
+                rec_text, rec_color = "TAKE PROFIT/SELL", "orange"
+            else:
+                rec_text, rec_color = "HOLD/NEUTRAL", "blue"
+                
+            c5.markdown(f"**:{rec_color}[{rec_text}]**")
+            c5.caption(f"Confidence: {conf}%")
+            
+            # Show User Tag
+            tag = row.get("tag", "HOLD")
+            tag_colors = {"HOLD": "blue", "SELL": "orange", "BUY AGAIN": "green"}
+            c6.markdown(f"Status: :{tag_colors.get(tag, 'gray')}[{tag}]")
+            
+            # Actions
+            with c6:
+                sub_c1, sub_c2, sub_c3 = st.columns(3)
+                if sub_c1.button("H", key=f"hold_{row['id']}", help="Mark as HOLD", use_container_width=True):
+                    update_trade_tag(row['id'], "HOLD")
+                    st.rerun()
+                if sub_c2.button("S", key=f"sell_{row['id']}", help="Mark as SELL", use_container_width=True):
+                    update_trade_tag(row['id'], "SELL")
+                    st.rerun()
+                if sub_c3.button("B", key=f"buy_{row['id']}", help="Mark as BUY AGAIN", use_container_width=True):
+                    update_trade_tag(row['id'], "BUY AGAIN")
+                    st.rerun()
+                    
+        st.divider()
+        if st.checkbox("Show Raw Data Table"):
+            st.dataframe(pf, use_container_width=True)
     else: st.info("Portfolio Empty")
 
 elif selected_nav == "Symbol":
