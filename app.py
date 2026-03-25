@@ -36,24 +36,9 @@ init_db()
 
 st.set_page_config(page_title="NEPSE Technical Analyzer", layout="wide")
 
-# --- HEADER: WELCOME, REFRESH & LOGOUT ---
+# --- HEADER: WELCOME ---
 if "logged_in" in st.session_state and st.session_state.logged_in:
-    h_col1, h_col2 = st.columns([7, 3])
-    with h_col1:
-        st.markdown(f"**WELCOME, {st.session_state.username.upper()}!**")
-    
-    with h_col2:
-        btn_col1, btn_col2 = st.columns(2)
-        with btn_col1:
-            if st.button("Refresh Market Data", use_container_width=True):
-                st.session_state.cache_key = datetime.now().isoformat()
-                st.rerun()
-        with btn_col2:
-            if st.button("Logout", use_container_width=True):
-                set_user_session(st.session_state.username, "")
-                st.session_state.logged_in = False
-                st.query_params.clear()
-                st.rerun()
+    st.caption(f"WELCOME, {st.session_state.username.upper()}!")
     st.divider()
 
 if "logged_in" not in st.session_state:
@@ -197,29 +182,45 @@ tab_icons = {
 if st.session_state.get("is_admin", False):
     tab_icons["Admin Panel"] = "people"
 
-tab_list = list(tab_icons.keys())
+# Combine navigational tabs with action items for uniform look
+nav_options = list(tab_icons.keys()) + ["Refresh Data", "Logout"]
+nav_icons = list(tab_icons.values()) + ["arrow-clockwise", "box-arrow-right"]
+
 current_nav = st.query_params.get("tab", "Portfolio")
 
 with st.sidebar:
     selected_nav = option_menu(
         menu_title="Menu",
-        options=tab_list,
-        icons=list(tab_icons.values()),
+        options=nav_options,
+        icons=nav_icons,
         menu_icon="cast",
-        default_index=tab_list.index(current_nav) if current_nav in tab_list else 0,
+        default_index=nav_options.index(current_nav) if current_nav in nav_options else 0,
         styles={
             "container": {"padding": "5!important", "background-color": "transparent"},
             "icon": {"color": "orange", "font-size": "18px"}, 
-            "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px", "--hover-color": "#eee"},
+            "nav-link": {"font-size": "15px", "text-align": "left", "margin":"0px", "--hover-color": "#eee"},
             "nav-link-selected": {"background-color": "#2c3e50"},
         }
     )
     
-    if selected_nav != current_nav:
+    # Handle Action Items vs Navigation
+    if selected_nav == "Logout":
+        set_user_session(st.session_state.username, "")
+        st.session_state.logged_in = False
+        st.query_params.clear()
+        st.rerun()
+    elif selected_nav == "Refresh Data":
+        st.session_state.cache_key = datetime.now().isoformat()
+        st.rerun()
+    elif selected_nav != current_nav:
         st.query_params["tab"] = selected_nav
         st.rerun()
 
+    # --- SIDEBAR INFO ---
     st.divider()
+    last_update_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.000")
+    st.caption(f"Last updated: {last_update_str}")
+
     st.header("Technical Params")
     lookback_days = st.slider("Single Lookback", 20, 120, 45)
     all_lookback = st.slider("Global Lookback", 20, 80, 35)
