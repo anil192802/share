@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+import pytz
 from typing import Any
 
 import pandas as pd
@@ -74,20 +75,21 @@ if not st.session_state.logged_in:
     st.stop()
 
 # --- HELPER FUNCTIONS & CACHING ---
+def get_nepal_time() -> datetime:
+    """Returns the current time in Nepal (UTC+5:45)."""
+    nepal_tz = pytz.timezone('Asia/Kathmandu')
+    return datetime.now(nepal_tz)
+
 def is_market_open() -> bool:
     """Returns True if current time is within NEPSE trading hours (11 AM - 3 PM, Sun-Thu)."""
-    # Current time in Nepal is UTC+5:45
-    # We use system time if running locally in Nepal, otherwise adjust offset
-    now = datetime.now()
-    # Check if Sunday (6) to Thursday (3) in Python weekday (0=Mon, 6=Sun)
-    # Sunday=6, Monday=0, Tuesday=1, Wednesday=2, Thursday=3
+    now = get_nepal_time()
+    # Sunday (6) to Thursday (3) in Python weekday
     is_trading_day = now.weekday() in [6, 0, 1, 2, 3] 
     is_trading_hours = 11 <= now.hour < 15
     return is_trading_day and is_trading_hours
 
 def get_cache_ttl() -> int:
     """Returns 0 if market is open (no cache), else 300 seconds."""
-    # Logic: If market is open, bypass cache for real-time symbols
     return 0 if is_market_open() else 300
 
 @st.cache_data(ttl=300)
@@ -184,12 +186,13 @@ def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame)
     return enriched
 
 # --- SIDEBAR & STATE ---
-if "cache_key" not in st.session_state: st.session_state.cache_key = datetime.now().isoformat()
-
 # --- REAL-TIME MARKET SYNC ---
 # If market is open, force cache refresh on every interaction
+if "cache_key" not in st.session_state: 
+    st.session_state.cache_key = get_nepal_time().isoformat()
+
 if is_market_open():
-    st.session_state.cache_key = datetime.now().isoformat()
+    st.session_state.cache_key = get_nepal_time().isoformat()
     st.sidebar.caption("⚡ Market Open: Live Data Active")
 else:
     st.sidebar.caption("🌙 Market Closed")
@@ -244,8 +247,8 @@ with st.sidebar:
 
     # --- SIDEBAR INFO ---
     st.divider()
-    last_update_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.000")
-    st.caption(f"Last updated: {last_update_str}")
+    last_update_str = get_nepal_time().strftime("%Y-%m-%d %H:%M:%S.000")
+    st.caption(f"Last updated (NPT): {last_update_str}")
 
     st.header("Technical Params")
     lookback_days = st.slider("Single Lookback", 20, 120, 45)
@@ -482,4 +485,5 @@ elif selected_nav == "Admin Panel":
         st.info("No users found.")
 
 st.divider()
-st.caption(f"Last updated: {datetime.now().strftime('%Y-%M-%d %H:%M:%S')}")
+last_update_str = get_nepal_time().strftime("%Y-%m-%d %H:%M:%S")
+st.caption(f"Last updated (NPT): {last_update_str}")
