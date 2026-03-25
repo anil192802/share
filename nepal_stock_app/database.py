@@ -118,14 +118,14 @@ def list_users():
     conn.close()
     return users
 
-def add_trade(username: str, symbol: str, buy_price: float, quantity: int, stop_loss: float = None):
+def add_trade(username: str, symbol: str, buy_price: float, quantity: int, stop_loss: float = None, tag: str = 'HOLD'):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     date_added = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute('''
-        INSERT INTO portfolio (username, symbol, buy_price, quantity, stop_loss, date_added)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (username, symbol.upper(), buy_price, quantity, stop_loss, date_added))
+        INSERT INTO portfolio (username, symbol, buy_price, quantity, stop_loss, tag, date_added)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (username, symbol.upper(), buy_price, quantity, stop_loss, tag, date_added))
     conn.commit()
     conn.close()
 

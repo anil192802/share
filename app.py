@@ -490,10 +490,11 @@ elif selected_nav == "Portfolio":
             st.write("---")
             if st.form_submit_button("➕ ADD TO PORTFOLIO", use_container_width=True, type="primary"):
                 sl_val = p_sl if p_sl > 0 else None
-                # Updated database call with tag support if your database.py supports it
-                # Note: Assuming add_trade signature is consistent with earlier edits
-                add_trade(st.session_state.username, p_sym, p_prc, p_qty, sl_val)
-                st.success(f"Successfully added {p_qty} shares of {p_sym} to your collection.")
+                # Updated database call with tag support
+                add_trade(st.session_state.username, p_sym, p_prc, p_qty, stop_loss=sl_val, tag=p_tag)
+                # Toast notification for feedback
+                st.toast(f"✅ {p_sym} added to Portfolio!", icon="📈")
+                # Note: clear_on_submit=True in st.form handles visual reset
                 st.rerun()
     
     pf = get_portfolio(st.session_state.username)
