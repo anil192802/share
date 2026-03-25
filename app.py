@@ -139,13 +139,15 @@ def get_symbol_news_signal(cache_key: str, symbol: str) -> dict[str, Any]:
     }
 
 @st.cache_data(ttl=3600)
-def get_all_symbols_technical(cache_key: str, lookback: int) -> pd.DataFrame:
+def get_all_symbols_technical(cache_key: str, lookback: int, override_symbols: list[str] = None) -> pd.DataFrame:
     del cache_key
     today_df = fetch_today_share_data()
     if today_df.empty or "symbol" not in today_df.columns: return pd.DataFrame()
     
     symbol_ltp_map = {str(row["symbol"]).upper(): row.get("ltp") for _, row in today_df.iterrows()}
-    symbols = sorted(symbol_ltp_map.keys())
+    
+    # Use provided symbols if any, else use all
+    symbols = sorted(override_symbols) if override_symbols else sorted(symbol_ltp_map.keys())
 
     def analyze_symbol(symbol: str):
         try:
@@ -269,14 +271,37 @@ def market_summary_fragment():
         st.session_state.market_df = market_df
         st.session_state.available_symbols = sorted(market_df["symbol"].unique().tolist()) if not market_df.empty else ["NABIL"]
 
-# 2. Deep Market Technicals (Heavy & Loaded on Demand)
+# 2. Deep Market Technicals (Progressive & Parallel)
 def load_deep_technicals():
     if "all_symbols_master_df" not in st.session_state or st.session_state.get("refresh_heavy", False):
-        with st.status("Analyzing Full Market (Heavy Mode)...", expanded=False) as status:
-            raw_all_df = get_all_symbols_technical(st.session_state.cache_key, all_lookback)
-            st.session_state.all_symbols_master_df = enrich_all_symbols(raw_all_df, st.session_state.market_df)
+        all_symbols = st.session_state.available_symbols
+        # Progress Tracking setup
+        all_results = []
+        progress_container = st.empty()
+        table_container = st.empty()
+        
+        with st.status("🚀 Initializing Progressive Analysis...", expanded=True) as status:
+            # We split the technical analysis into small parallel chunks for progressive display
+            chunk_size = 20
+            chunks = [all_symbols[i:i + chunk_size] for i in range(0, len(all_symbols), chunk_size)]
+            
+            for i, chunk in enumerate(chunks):
+                # Analyze a chunk of symbols
+                raw_chunk_df = get_all_symbols_technical(st.session_state.cache_key, all_lookback, override_symbols=chunk)
+                if not raw_chunk_df.empty:
+                    enriched_chunk = enrich_all_symbols(raw_chunk_df, st.session_state.market_df)
+                    all_results.append(enriched_chunk)
+                    
+                    # Update the UI progressively
+                    current_df = pd.concat(all_results)
+                    progress = (len(current_df) / len(all_symbols))
+                    status.update(label=f"📡 Analyzed {len(current_df)}/{len(all_symbols)} symbols...")
+                    table_container.dataframe(current_df.head(top_n), use_container_width=True)
+            
+            st.session_state.all_symbols_master_df = pd.concat(all_results)
             st.session_state.refresh_heavy = False
-            status.update(label="Full Market Analysis Ready!", state="complete")
+            status.update(label="✅ Data Loaded & Analysis Complete!", state="complete", expanded=False)
+            table_container.empty() # Clear the temporary progressive table
 
 # Execute lightweight fetch immediately (Non-blocking for UI layout)
 market_summary_fragment()
