@@ -226,7 +226,8 @@ def get_all_symbols_technical(cache_key: str, lookback: int, override_symbols: l
                 "latest_close": latest.get("close"), "signal": signal.signal,
                 "technical_score": signal.score, "confidence": signal.confidence,
                 "entry_price": signal.entry_price, "stop_loss": signal.stop_loss,
-                "target_price": signal.target_price, "risk_reward": signal.risk_reward_ratio,
+                "target_price": signal.target_price, "expected_7d_price": signal.expected_7d_price,
+                "risk_reward": signal.risk_reward_ratio,
                 "simple_note": signal.simple_note, "beginner_action": signal.beginner_action, "reason": signal.reason,
             }
         except: return None
@@ -263,6 +264,8 @@ def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame)
         "signal": "Trend Prediction",
         "technical_score": "Safety Score",
         "confidence": "Accuracy (%)",
+        "AI_Confidence": "AI Confidence (%)",
+        "expected_7d_price": "Expected Price (7 Days)",
         "entry_price": "Buying Point",
         "stop_loss": "Safety Exit (Stop Loss)",
         "target_price": "Selling Goal",
@@ -271,7 +274,20 @@ def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame)
         "beginner_action": "Action to Take",
         "reason": "Analysis Basis"
     }
-    return enriched.rename(columns=friendly_names)
+    # REORDER COLUMNS for better UX (AI confidence and 7D price after accuracy)
+    column_order = [
+        "Company Scrip", "Current Price", "Trend Prediction", "Safety Score", 
+        "Accuracy (%)", "AI Confidence (%)", "Expected Price (7 Days)",
+        "Buying Point", "Safety Exit (Stop Loss)", "Selling Goal", 
+        "Profit/Risk Ratio", "Sector", "Expert Tip", "Action to Take", "Analysis Basis"
+    ]
+    
+    result = enriched.rename(columns=friendly_names)
+    # Filter to only existing columns in order
+    existing_cols = [c for c in column_order if c in result.columns]
+    remaining_cols = [c for c in result.columns if c not in column_order]
+    
+    return result[existing_cols + remaining_cols]
 
 # --- SIDEBAR & STATE ---
 # --- REAL-TIME MARKET SYNC ---
@@ -288,7 +304,7 @@ else:
 # --- SIDEBAR NAVIGATION ---
 tab_icons = {
     "Portfolio": "house", 
-    "Market": "briefcase", 
+    "Market (Intraday Transaction)": "briefcase", 
     "Symbol": "search", 
     "All Symbols": "list-ul", 
     "Buy Tomorrow": "arrow-up-circle", 
@@ -397,7 +413,7 @@ available_symbols = st.session_state.get("available_symbols", ["NABIL"])
 # --- CONTENT RENDERING ---
 tab_titles = {
     "Portfolio": "📈", 
-    "Market": "📊", 
+    "Market (Intraday Transaction)": "📊", 
     "Symbol": "🔍", 
     "All Symbols": "📋", 
     "Buy Tomorrow": "🚀", 
@@ -405,14 +421,14 @@ tab_titles = {
     "Sector Wise": "🏗️",
     "Admin Panel": "👥"
 }
-st.title(f"{tab_titles[selected_nav]} {selected_nav}")
+st.title(f"{tab_titles.get(selected_nav, '💎')} {selected_nav}")
 
 if "symbol" in market_df.columns:
     available_symbols = sorted(market_df["symbol"].unique().tolist())
 else:
     available_symbols = ["NABIL", "NICA", "GBIME"] # Fallback
 
-if selected_nav == "Market":
+if selected_nav == "Market (Intraday Transaction)":
     # --- MODERN MARKET DASHBOARD ---
     st.subheader("Deep Market Intelligence")
     st.caption("AI-powered technical indicators for all NEPSE stocks.")
@@ -447,7 +463,7 @@ if selected_nav == "Market":
         st.dataframe(
             deep_df.sort_values(by="AI_Score", ascending=False).head(top_n),
             use_container_width=True,
-            height=None,
+            height=int(top_n * 35 * 2) if top_n > 0 else 800, # 200% larger assuming 35px per row
             hide_index=True
         )
     else:
@@ -562,12 +578,22 @@ elif selected_nav == "Portfolio":
             c5.markdown(f"**{rec_icon} :{rec_color}[{rec_text}]**")
             c5.progress(conf/100, text=f"Confidence: {conf}%")
             
-            # Inline Action (Sell/Edit)
+            # Inline Action with Confirmation
             if st.button(f"🗑️ Remove {row['symbol']}", key=f"del_{idx}", use_container_width=True):
-                # Import remove_trade if not available
-                from nepal_stock_app.database import remove_trade
-                remove_trade(row['id'])
-                st.rerun()
+                st.session_state[f"confirm_delete_{idx}"] = True
+
+            if st.session_state.get(f"confirm_delete_{idx}", False):
+                st.warning(f"Are you sure you want to remove **{row['symbol']}** from your portfolio?")
+                col_confirm, col_cancel = st.columns(2)
+                if col_confirm.button("✅ Yes, Delete", key=f"yes_{idx}", use_container_width=True, type="primary"):
+                    from nepal_stock_app.database import remove_trade
+                    remove_trade(row['id'])
+                    del st.session_state[f"confirm_delete_{idx}"]
+                    st.success(f"Removed {row['symbol']}")
+                    st.rerun()
+                if col_cancel.button("❌ No, Keep It", key=f"no_{idx}", use_container_width=True):
+                    del st.session_state[f"confirm_delete_{idx}"]
+                    st.rerun()
 
             st.divider()
         st.divider()
@@ -600,11 +626,15 @@ elif selected_nav == "Symbol":
                 if abs(hist.iloc[-1]["close"] - live_price) > 0.1:
                     hist.loc[hist.index[-1], "close"] = live_price
             
-            sig = evaluate_technical_signal(hist)
-            c1, c2, c3 = st.columns(3)
+            # --- CALCULATE TECHNICAL SIGNAL ---
+            indicators = add_technical_indicators(hist)
+            sig = evaluate_technical_signal(indicators)
+            
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("Price", f"{hist.iloc[-1]['close']:.2f}")
             c2.metric("Signal", sig.signal)
-            c3.metric("Confidence", f"{sig.confidence}%")
+            c3.metric("7D Target", f"{sig.expected_7d_price:.2f}" if sig.expected_7d_price else "N/A")
+            c4.metric("Confidence", f"{sig.confidence}%")
             
             candle = go.Figure(data=[go.Candlestick(
                 x=hist["date"], open=hist["open"], high=hist["high"], 
@@ -622,19 +652,19 @@ elif selected_nav == "Symbol":
 elif selected_nav == "All Symbols":
     load_deep_technicals()
     total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
-    st.dataframe(total_df, use_container_width=True)
+    st.dataframe(total_df, use_container_width=True, hide_index=True)
 
 elif selected_nav == "Buy Tomorrow":
     load_deep_technicals()
     total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
     buy_list = total_df[total_df["signal"] == "BUY"].sort_values("confidence", ascending=False)
-    st.dataframe(buy_list, use_container_width=True)
+    st.dataframe(buy_list, use_container_width=True, hide_index=True)
 
 elif selected_nav == "Sell Tomorrow":
     load_deep_technicals()
     total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
     sell_list = total_df[total_df["signal"] == "SELL"].sort_values("confidence", ascending=False)
-    st.dataframe(sell_list, use_container_width=True)
+    st.dataframe(sell_list, use_container_width=True, hide_index=True)
 
 elif selected_nav == "Sector Wise":
     load_deep_technicals()
@@ -646,7 +676,7 @@ elif selected_nav == "Sector Wise":
         match = total_df[total_df["sector"] == s].head(1)
         if not match.empty: picks.append(match.iloc[0])
     if picks:
-        st.dataframe(pd.DataFrame(picks), use_container_width=True)
+        st.dataframe(pd.DataFrame(picks), use_container_width=True, hide_index=True)
     else:
         st.info("No picks available for sectors today.")
 

@@ -14,6 +14,7 @@ class TechnicalSignal:
     entry_price: float | None = None
     stop_loss: float | None = None
     target_price: float | None = None
+    expected_7d_price: float | None = None
     simple_note: str = ""
     beginner_action: str = ""
     risk_reward_ratio: float | None = None
@@ -225,19 +226,32 @@ def evaluate_technical_signal(indicator_df: pd.DataFrame) -> TechnicalSignal:
     entry_price = float(close) if pd.notna(close) else None
     stop_loss = None
     target_price = None
+    expected_7d_price = None
     simple_note = "Wait and watch"
     beginner_action = "Wait"
     risk_reward_ratio = None
 
     if entry_price is not None and risk_buffer is not None and risk_buffer > 0:
+        # Simple Momentum-based 7-Day Projection
+        # Based on average daily return of last 5 days
+        past_5d = indicator_df.tail(6)["close"].pct_change().dropna()
+        avg_ret = float(past_5d.mean()) if not past_5d.empty else 0.0
+        # Dampen the momentum to be conservative (e.g. 50% of recent trend)
+        dampened_7d_ret = avg_ret * 3.5 # 0.5 * 7 days
+        expected_7d_price = entry_price * (1 + dampened_7d_ret)
+
         if signal == "BUY":
             stop_loss = max(0.0, entry_price - risk_buffer)
             target_price = entry_price + (risk_buffer * 2)
+            # Ensure 7D projection aligns with technical target
+            expected_7d_price = max(expected_7d_price, entry_price + (risk_buffer * 0.5))
             simple_note = "Possible buy setup"
             beginner_action = "Buy small (step by step)"
         elif signal == "SELL":
             stop_loss = entry_price + risk_buffer
             target_price = max(0.0, entry_price - (risk_buffer * 2))
+            # Ensure 7D projection aligns with technical drop
+            expected_7d_price = min(expected_7d_price, entry_price - (risk_buffer * 0.5))
             simple_note = "Possible sell/avoid setup"
             beginner_action = "Book profit / Avoid new buy"
         else:
@@ -260,6 +274,7 @@ def evaluate_technical_signal(indicator_df: pd.DataFrame) -> TechnicalSignal:
         entry_price=entry_price,
         stop_loss=stop_loss,
         target_price=target_price,
+        expected_7d_price=expected_7d_price,
         simple_note=simple_note,
         beginner_action=beginner_action,
         risk_reward_ratio=risk_reward_ratio,
