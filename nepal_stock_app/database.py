@@ -14,16 +14,19 @@ def init_db():
             symbol TEXT NOT NULL,
             buy_price REAL NOT NULL,
             quantity INTEGER NOT NULL,
-            date_added TEXT NOT NULL,
-            tag TEXT DEFAULT 'HOLD'
+            tag TEXT DEFAULT 'HOLD',
+            stop_loss REAL,
+            date_added TEXT NOT NULL
         )
     ''')
     
-    # Update existing table if tag column is missing
+    # Update existing table if columns are missing
     cursor.execute("PRAGMA table_info(portfolio);")
     columns = [col[1] for col in cursor.fetchall()]
     if "tag" not in columns:
         cursor.execute("ALTER TABLE portfolio ADD COLUMN tag TEXT DEFAULT 'HOLD';")
+    if "stop_loss" not in columns:
+        cursor.execute("ALTER TABLE portfolio ADD COLUMN stop_loss REAL;")
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,14 +118,14 @@ def list_users():
     conn.close()
     return users
 
-def add_trade(username: str, symbol: str, buy_price: float, quantity: int):
+def add_trade(username: str, symbol: str, buy_price: float, quantity: int, stop_loss: float = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     date_added = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute('''
-        INSERT INTO portfolio (username, symbol, buy_price, quantity, date_added)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (username, symbol.upper(), buy_price, quantity, date_added))
+        INSERT INTO portfolio (username, symbol, buy_price, quantity, stop_loss, date_added)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (username, symbol.upper(), buy_price, quantity, stop_loss, date_added))
     conn.commit()
     conn.close()
 

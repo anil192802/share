@@ -182,10 +182,30 @@ def compute_position_size(entry_price: Any, stop_loss: Any, capital: float, risk
 def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame) -> pd.DataFrame:
     if all_symbols_df.empty: return pd.DataFrame()
     market_cols = market_frame[["symbol", "sector", "signal", "score", "confidence", "ltp", "reason"]].copy()
-    market_cols.columns = ["symbol", "m_sector", "m_signal", "m_score", "m_conf", "m_ltp", "m_reason"]
+    
+    # Rename for professional clarity instead of cryptic m_ prefixed names
+    market_cols.columns = ["symbol", "Sector", "AI_Signal", "AI_Score", "AI_Confidence", "Live_Price", "AI_Logic"]
+    
     enriched = all_symbols_df.merge(market_cols, on="symbol", how="left")
-    enriched["sector"] = enriched["m_sector"].fillna("Others")
-    return enriched
+    enriched["Sector"] = enriched["Sector"].fillna("Others")
+    
+    # Final cleanup of all column names for a non-share market user
+    friendly_names = {
+        "symbol": "Company Scrip",
+        "today_ltp": "Current Price",
+        "latest_close": "Last Close Price",
+        "signal": "Trend Prediction",
+        "technical_score": "Safety Score",
+        "confidence": "Accuracy (%)",
+        "entry_price": "Buying Point",
+        "stop_loss": "Safety Exit (Stop Loss)",
+        "target_price": "Selling Goal",
+        "risk_reward": "Profit/Risk Ratio",
+        "simple_note": "Expert Tip",
+        "beginner_action": "Action to Take",
+        "reason": "Analysis Basis"
+    }
+    return enriched.rename(columns=friendly_names)
 
 # --- SIDEBAR & STATE ---
 # --- REAL-TIME MARKET SYNC ---
@@ -329,44 +349,67 @@ else:
 if selected_nav == "Market":
     load_deep_technicals()
     market_df = st.session_state.get("market_df", pd.DataFrame())
-    st.dataframe(market_df.head(top_n), use_container_width=True)
+    # Professional full-page table WITHOUT internal scroll container
+    st.markdown("""
+        <style>
+            /* Allow the Streamlit main content to handle the scrolling */
+            [data-testid="stDataFrame"] > div {
+                height: auto !important;
+                max-height: none !important;
+            }
+        </style>
+    """, unsafe_allow_stdio=True if "st.markdown" in locals() else True)
+    # Using height parameter as None or very large to prevent internal scroll
+    st.dataframe(market_df.head(top_n), use_container_width=True, height=None)
 
 elif selected_nav == "Portfolio":
     with st.expander("Add Trade"):
         with st.form("trade_form"):
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             p_sym = c1.selectbox("Symbol", options=available_symbols, index=available_symbols.index("NABIL") if "NABIL" in available_symbols else 0)
-            p_prc = c2.number_input("Price", value=500.0)
-            p_qty = c3.number_input("Qty", value=10)
-            if st.form_submit_button("Add"):
-                add_trade(st.session_state.username, p_sym, p_prc, p_qty)
-                st.success(f"Added {p_sym}"); st.rerun()
+            p_qty = c2.number_input("Qty", value=10, min_value=1)
+            p_prc = c3.number_input("Buy Price", value=500.0)
+            p_sl = c4.number_input("Stop Loss (SL)", value=0.0, help="Optional: Set price to trigger sell alert")
+            
+            if st.form_submit_button("Add to Portfolio"):
+                sl_val = p_sl if p_sl > 0 else None
+                add_trade(st.session_state.username, p_sym, p_prc, p_qty, sl_val)
+                st.success(f"Added {p_sym} at {p_prc}"); st.rerun()
     
     pf = get_portfolio(st.session_state.username)
     if not pf.empty:
         # Pre-calculate data for display
         ltp_map = dict(zip(market_df["symbol"], market_df.get("ltp", [])))
         
+        # Risk Alerts Logic
+        sl_hits = []
+        
         # Link market technical signals to portfolio
-        # we can use the market_df which already has 'signal' and 'confidence'
         pf = pf.merge(market_df[['symbol', 'signal', 'confidence']], on='symbol', how='left')
         
         pf["LTP"] = pf["symbol"].map(ltp_map)
         pf["P&L"] = (pf["LTP"] - pf["buy_price"]) * pf["quantity"]
         pf["Action Date"] = pd.to_datetime(pf["date_added"]).dt.strftime("%Y-%m-%d")
         
-        # Display each stock as a card-like interface or rows with action buttons
+        # Check for Stop Loss hits
+        for _, r in pf.iterrows():
+            if pd.notna(r['stop_loss']) and r['stop_loss'] > 0:
+                if r['LTP'] <= r['stop_loss']:
+                    sl_hits.append(f"🚨 **{r['symbol']}** hit SL! Price {r['LTP']} <= SL {r['stop_loss']}")
+
+        if sl_hits:
+            for alert in sl_hits:
+                st.error(alert)
+
         st.markdown("### My Holdings")
         
-        # Header Row
+        # Header Row - Added SL column
         h1, h2, h3, h4, h5, h6 = st.columns([2, 1.5, 1.5, 2, 2.5, 2.5])
         h1.write("**Symbol**")
-        h2.write("**Buy/LTP**")
-        h2.caption("Entry / Current")
-        h3.write("**Qty**")
+        h2.write("**Entry/LTP**")
+        h3.write("**Qty / SL**")
         h4.write("**P&L**")
         h5.write("**Tech Signal**")
-        h5.caption("AI Analysis")
         h6.write("**Status/Action**")
         
         for idx, row in pf.iterrows():
@@ -375,7 +418,10 @@ elif selected_nav == "Portfolio":
             c1.caption(f"Added: {row['Action Date']}")
             
             c2.write(f"{row['buy_price']} / {row.get('LTP', '-')}")
-            c3.write(str(int(row["quantity"])))
+            
+            sl_disp = f"SL: {row['stop_loss']}" if pd.notna(row['stop_loss']) else "No SL"
+            c3.write(f"{int(row['quantity'])}")
+            c3.caption(sl_disp)
             
             pnl_color = "green" if row["P&L"] >= 0 else "red"
             c4.markdown(f":{pnl_color}[{row['P&L']:.2f}]")
