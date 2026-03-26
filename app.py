@@ -310,8 +310,7 @@ tab_icons = {
     "Symbol": "search", 
     "All Symbols": "list-ul", 
     "Buy Tomorrow": "arrow-up-circle", 
-    "Sell Tomorrow": "arrow-down-circle", 
-    "Sector Wise": "grid"
+    "Sell Tomorrow": "arrow-down-circle"
 }
 
 if st.session_state.get("is_admin", False):
@@ -426,7 +425,6 @@ tab_titles = {
     "All Symbols": "📋", 
     "Buy Tomorrow": "🚀", 
     "Sell Tomorrow": "📉", 
-    "Sector Wise": "🏗️",
     "Admin Panel": "👥"
 }
 st.title(f"{tab_titles.get(selected_nav, '💎')} {selected_nav}")
@@ -761,20 +759,6 @@ elif selected_nav == "Sell Tomorrow":
             st.info("No SELL signals detected for tomorrow.")
     else:
         st.warning("Please wait for market analysis to complete.")
-
-elif selected_nav == "Sector Wise":
-    load_deep_technicals()
-    total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
-    # ... using total_df below ...
-    sectors = ["Commercial Banks", "Development Banks", "Finance", "Hotels", "Hydro", "Life Insurance", "Microfinance", "Non-Life Insurance", "Others"]
-    picks = []
-    for s in sectors:
-        match = total_df[total_df["sector"] == s].head(1)
-        if not match.empty: picks.append(match.iloc[0])
-    if picks:
-        st.dataframe(pd.DataFrame(picks), use_container_width=True, hide_index=True)
-    else:
-        st.info("No picks available for sectors today.")
 
 elif selected_nav == "Admin Panel":
     st.subheader("User Management")
