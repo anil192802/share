@@ -105,9 +105,51 @@ def is_market_open() -> bool:
     """Returns True if current time is within NEPSE trading hours (11 AM - 3 PM, Sun-Thu)."""
     now = get_nepal_time()
     # Sunday (6) to Thursday (3) in Python weekday
-    is_trading_day = now.weekday() in [6, 0, 1, 2, 3] 
+    is_trading_day = now.weekday() in [6, 0, 1, 2, 3]
     is_trading_hours = 11 <= now.hour < 15
     return is_trading_day and is_trading_hours
+
+
+def render_signal_table(df: pd.DataFrame, trend: str = None, title: str = ""):
+    """Render a fixed-height filtered table with no-data/placeholders and UX breathing."""
+    st.subheader(title)
+    if df is None or df.empty:
+        st.info("No data yet. Please wait for analysis to complete.")
+        st.empty()
+        return
+
+    if trend:
+        filtered = df[df["Trend Prediction"].astype(str).str.upper() == trend.upper()].copy()
+    else:
+        filtered = df.copy()
+
+    # Search filter
+    search_term = st.text_input("Search symbol / reason / sector", value="", help="Type keyword to search table rows")
+    if search_term:
+        st.markdown(f"*Filtering by: **{search_term}***")
+        mask = (
+            filtered["Company Scrip"].astype(str).str.contains(search_term, case=False, na=False)
+            | filtered["Analysis Basis"].astype(str).str.contains(search_term, case=False, na=False)
+            | filtered["Sector"].astype(str).str.contains(search_term, case=False, na=False)
+            | filtered["Trend Prediction"].astype(str).str.contains(search_term, case=False, na=False)
+        )
+        filtered = filtered[mask]
+
+    if filtered.empty:
+        st.warning(f"No {trend if trend else 'data'} signals match the current filter.")
+        st.dataframe(filtered, use_container_width=True, height=500)
+        return
+
+    # Add a simple accent column to show strength/state clearly
+    filtered = filtered.copy()
+    filtered["Trend Badge"] = filtered["Trend Prediction"].map({
+        "BUY": "🟢 BUY",
+        "SELL": "🔴 SELL",
+        "HOLD": "🟡 HOLD"
+    }).fillna(filtered["Trend Prediction"])
+
+    st.dataframe(filtered, use_container_width=True, height=750)
+
 
 # --- AUTHENTICATION LOGIC ---
 if "logged_in" not in st.session_state:
@@ -264,6 +306,7 @@ def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame)
         "latest_close": "Last Close Price",
         "signal": "Trend Prediction",
         "AI_Intraday_Signal": "Intraday AI Advice",
+        "AI_Intraday_Score": "Intraday Trend Score",
         "technical_score": "Safety Score",
         "confidence": "Accuracy (%)",
         "AI_Confidence": "AI Confidence (%)",
@@ -278,7 +321,7 @@ def enrich_all_symbols(all_symbols_df: pd.DataFrame, market_frame: pd.DataFrame)
     }
     # REORDER COLUMNS for better UX (AI confidence and 7D price after accuracy)
     column_order = [
-        "Company Scrip", "Current Price", "Trend Prediction", "Intraday AI Advice", "Safety Score", 
+        "Company Scrip", "Current Price", "Trend Prediction", "Intraday AI Advice", "Intraday Trend Score", "Safety Score", 
         "Accuracy (%)", "AI Confidence (%)", "Expected Price (7 Days)",
         "Buying Point", "Safety Exit (Stop Loss)", "Selling Goal", 
         "Profit/Risk Ratio", "Sector", "Expert Tip", "Action to Take", "Analysis Basis"
@@ -429,6 +472,12 @@ tab_titles = {
 }
 st.title(f"{tab_titles.get(selected_nav, '💎')} {selected_nav}")
 
+# --- Global top status row (performance + data freshness) ---
+status_col_a, status_col_b, status_col_c = st.columns([1, 1, 1])
+status_col_a.metric("Market State", "OPEN" if is_market_open() else "CLOSED", delta=None)
+status_col_b.metric("Universe", f"{len(available_symbols)} symbols", delta=None)
+status_col_c.metric("Last Sync", get_nepal_time().strftime("%Y-%m-%d %H:%M:%S"), delta=None)
+
 if "symbol" in market_df.columns:
     available_symbols = sorted(market_df["symbol"].unique().tolist())
 else:
@@ -471,32 +520,22 @@ if selected_nav == "Market (Intraday Transaction)":
             min_conf = f2.slider("Min Accuracy (%)", 0, 90, 70)
             sector_filter = f3.multiselect("Sector Filter", sorted(deep_df["Sector"].unique()))
             
-            filtered_df = deep_df[deep_df["AI_Signal"].isin(filter_sig)]
-            filtered_df = filtered_df[filtered_df["AI_Confidence"] >= min_conf]
+            filtered_df = deep_df[deep_df["Trend Prediction"].isin(filter_sig)]
+            filtered_df = filtered_df[filtered_df["Accuracy (%)"] >= min_conf]
             if sector_filter:
                 filtered_df = filtered_df[filtered_df["Sector"].isin(sector_filter)]
 
         # Display filtering/sorting metrics
         c1, c2, c3 = st.columns(3)
         c1.metric("Opportunities Found", len(filtered_df), delta=f"{len(deep_df) - len(filtered_df)} filtered")
-        c2.metric("High Acc. Buy", len(filtered_df[filtered_df['AI_Signal'] == 'BUY']))
-        c3.metric("High Acc. Sell", len(filtered_df[filtered_df['AI_Signal'] == 'SELL']))
+        c2.metric("High Acc. Buy", len(filtered_df[filtered_df['Trend Prediction'] == 'BUY']))
+        c3.metric("High Acc. Sell", len(filtered_df[filtered_df['Trend Prediction'] == 'SELL']))
         
-        # CSS to fix the dataframe container for full-page scrolling
-        st.markdown("""
-            <style>
-                [data-testid="stDataFrame"] > div {
-                    height: auto !important;
-                    max-height: none !important;
-                }
-            </style>
-        """, unsafe_allow_html=True)
-        
-        # Render the final dataframe without internal scrolls
+        # Render the final dataframe with calculated height
         st.dataframe(
-            filtered_df.sort_values(by="AI_Score", ascending=False).head(top_n),
+            filtered_df.sort_values(by="Intraday Trend Score", ascending=False).head(top_n),
             use_container_width=True,
-            height=int(len(filtered_df) * 35 * 2) if len(filtered_df) > 0 else 800, 
+            height=int(min(len(filtered_df.head(top_n)), top_n) * 36) + 40 if len(filtered_df) > 0 else 200,
             hide_index=True
         )
     else:
@@ -728,37 +767,23 @@ elif selected_nav == "All Symbols":
     total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
     if not total_df.empty:
         st.success(f"Analysed {len(total_df)} Stocks Portfolio-wide.")
-        st.dataframe(total_df, use_container_width=True, hide_index=True, height=800)
+        if "Sector" in total_df.columns:
+            selected_sectors = st.multiselect("Filter sectors", sorted(total_df["Sector"].dropna().unique().tolist()), default=[])
+            if selected_sectors:
+                total_df = total_df[total_df["Sector"].isin(selected_sectors)]
+        render_signal_table(total_df, trend=None, title="All Symbols Snapshot")
     else:
         st.warning("Please wait for market analysis to complete.")
 
 elif selected_nav == "Buy Tomorrow":
     load_deep_technicals(filter_trend="BUY")
     total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
-    if not total_df.empty:
-        # STRICT FILTER: Only show BUY signals in this tab
-        buy_list = total_df[total_df["Trend Prediction"] == "BUY"].sort_values("Accuracy (%)", ascending=False)
-        if not buy_list.empty:
-            st.success(f"Found {len(buy_list)} Stocks with BUY signals for tomorrow.")
-            st.dataframe(buy_list, use_container_width=True, hide_index=True, height=800)
-        else:
-            st.info("No BUY signals detected for tomorrow.")
-    else:
-        st.warning("Please wait for market analysis to complete.")
+    render_signal_table(total_df, trend="BUY", title="Buy Tomorrow")
 
 elif selected_nav == "Sell Tomorrow":
     load_deep_technicals(filter_trend="SELL")
     total_df = st.session_state.get("all_symbols_master_df", pd.DataFrame())
-    if not total_df.empty:
-        # STRICT FILTER: Only show SELL signals in this tab
-        sell_list = total_df[total_df["Trend Prediction"] == "SELL"].sort_values("Accuracy (%)", ascending=False)
-        if not sell_list.empty:
-            st.error(f"Found {len(sell_list)} Stocks with SELL signals for tomorrow.")
-            st.dataframe(sell_list, use_container_width=True, hide_index=True, height=800)
-        else:
-            st.info("No SELL signals detected for tomorrow.")
-    else:
-        st.warning("Please wait for market analysis to complete.")
+    render_signal_table(total_df, trend="SELL", title="Sell Tomorrow")
 
 elif selected_nav == "Admin Panel":
     st.subheader("User Management")
