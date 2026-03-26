@@ -148,7 +148,11 @@ def render_signal_table(df: pd.DataFrame, trend: str = None, title: str = ""):
         "HOLD": "🟡 HOLD"
     }).fillna(filtered["Trend Prediction"])
 
-    st.dataframe(filtered, use_container_width=True, height=750)
+    # Reorder to put Trend Badge at the absolute front, remove SN index entirely
+    cols = ["Trend Badge"] + [c for c in filtered.columns if c != "Trend Badge"]
+    filtered = filtered[cols]
+
+    st.dataframe(filtered, use_container_width=True, height=750, hide_index=True)
 
 
 # --- AUTHENTICATION LOGIC ---
@@ -531,6 +535,14 @@ if selected_nav == "Market (Intraday Transaction)":
         c2.metric("High Acc. Buy", len(filtered_df[filtered_df['Trend Prediction'] == 'BUY']))
         c3.metric("High Acc. Sell", len(filtered_df[filtered_df['Trend Prediction'] == 'SELL']))
         
+        # Add visual logic to the intraday screener as well
+        filtered_df = filtered_df.copy()
+        filtered_df["Trend Badge"] = filtered_df["Trend Prediction"].map({
+            "BUY": "🟢 BUY", "SELL": "🔴 SELL", "HOLD": "🟡 HOLD"
+        }).fillna(filtered_df["Trend Prediction"])
+        cols = ["Trend Badge"] + [c for c in filtered_df.columns if c != "Trend Badge"]
+        filtered_df = filtered_df[cols]
+
         # Render the final dataframe with calculated height
         st.dataframe(
             filtered_df.sort_values(by="Intraday Trend Score", ascending=False).head(top_n),
